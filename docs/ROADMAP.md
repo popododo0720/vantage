@@ -94,9 +94,21 @@ performance, and failure-injection checks across supported reference clouds.
 
 The next goals expand the same product rather than start a separate console:
 
-- Administrator workspace for domains, projects, identity, fleet, quota, and
-  cross-project resources
-- Full image, network, and storage administration
+### Stage 5: Administrator and Identity
+
+- Explicit system, domain, and project token scope
+- Domains, projects, users, groups, and roles
+- Cross-project instances, host aggregates, and Placement resource classes
 - Multi-region and large-fleet operation
+
+### Stage 6: Image, Network, Quota, and Storage Administration
+
+- Separate Nova flavor and Glance image navigation
+- Neutron resource administration
+- Cinder quota, volume type, and backend administration
 - Optional audit and observability integrations
-- Heat, Octavia, Swift, and other catalog-discovered OpenStack services
+
+### Stage 7: Catalog Services
+
+- Capability-gated Heat, Octavia, Swift, and other discovered services
+- Explicit absent, unsupported, degraded, and policy-limited states

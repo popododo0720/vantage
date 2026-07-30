@@ -24,7 +24,7 @@ Goal 1 is the active delivery target.
 
 - Separate project and administrator workspaces
 - Multi-project, multi-domain, and multi-region operation
-- Keystone, Nova, Neutron, Glance, and Cinder as core services
+- Keystone, Nova, Placement, Neutron, Glance, and Cinder as core services
 - Capability-driven expansion to services such as Heat, Octavia, and Swift
 - Service-catalog discovery instead of hard-coded endpoints or topology
 - Deployment-tool, node-count, network-backend, and storage-backend neutrality
@@ -43,6 +43,8 @@ Goal 1 is the active delivery target.
 - Network and storage backends do not become user-facing API contracts.
 - Unsupported services and operations are hidden through catalog and capability
   discovery, not deployment-specific branches.
+- Absent, unsupported, degraded, and policy-limited capabilities gate
+  navigation and operations explicitly.
 
 ## Documents
 

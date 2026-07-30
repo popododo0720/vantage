@@ -22,7 +22,7 @@ architecture or performance constraints.
 
 - Project and administrator workspaces are first-class product surfaces.
 - Domain, region, project, and system scope remain explicit.
-- Keystone, Nova, Neutron, Glance, and Cinder are core services.
+- Keystone, Nova, Placement, Neutron, Glance, and Cinder are core services.
 - Heat, Octavia, Swift, and other services can appear when discovered through
   the service catalog and supported capabilities.
 - Navigation and behavior cannot depend on a deployment tool, node count,
@@ -64,7 +64,9 @@ Included:
 - Keystone sign-in and sign-out
 - Accessible project list and explicit project switch
 - Current project, domain, and region context
-- Used/limit quota for vCPU, RAM, instances, volumes, and floating IPs
+- Used/limit quota for vCPU, RAM, instances, and floating IPs
+- Cinder `gigabytes` in-use plus reserved usage, volume and snapshot counts,
+  and separate backup count/capacity quotas
 - Server-filtered, paginated instance list
 - Instance detail with status, image, flavor, addresses, and volume summary
 - Background revalidation and widget-level partial failure
@@ -145,13 +147,15 @@ Release gate:
 ## Administrator Workspace
 
 The administrator workspace is part of the product scope and begins as staged
-deliveries after the first project MVP:
+deliveries after the first project MVP. The active system, domain, or project
+token scope is always explicit:
 
 - Domains and projects
 - Users, groups, and roles
 - Cross-project instances
-- Hypervisors and capacity
-- Images and flavors
+- Hypervisors, host aggregates, and Placement resource classes
+- Flavors under Compute
+- Images under a separate Image service section
 - Neutron resources
 - Volume types and storage backends
 - Catalog and API capabilities
@@ -165,7 +169,8 @@ not a shared proxy for project users.
 
 - Feature availability is derived from the Keystone service catalog and API
   capabilities.
-- Unsupported services do not leave dead navigation or hard failures.
+- Absent, unsupported, degraded, and policy-limited capabilities gate
+  navigation and operations explicitly.
 - Heat, Octavia, Swift, and additional services are delivered as independent
   product goals after the core project and administrator workflows.
 - Multi-region and large-fleet behavior is validated independently from the

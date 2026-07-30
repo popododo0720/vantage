@@ -38,11 +38,13 @@ It is an operational console, not a marketing dashboard.
 
 ## Administrator Navigation
 
+- Token scope: System, Domain, or Project
 - Domains and projects
 - Users, groups, and roles
 - Cross-project instances
-- Hypervisors, aggregates, and capacity
-- Images and flavors as separate service resources
+- Hypervisors, aggregates, and Placement resource classes
+- Flavors under Compute
+- Images under a separate Image service section
 - Neutron resources
 - Volumes, volume types, and storage backends
 - Catalog and API capabilities
@@ -51,7 +53,9 @@ It is an operational console, not a marketing dashboard.
 
 The project and administrator workspaces share design tokens and interaction
 patterns, but never share an implicit scope. Service-specific navigation appears
-only when the catalog and capability checks support it.
+only when the catalog and capability checks support it. Absent, unsupported,
+degraded, and policy-limited states are explicit and gate affected navigation
+or operations.
 
 ## Required States
 
