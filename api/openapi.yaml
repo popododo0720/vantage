@@ -1,0 +1,476 @@
+openapi: 3.1.0
+info:
+  title: Vantage BFF API
+  version: 0.1.0
+  summary: Goal 1 contract for secure project entry
+  description: |
+    Browser-facing API for Vantage Goal 1. The browser never receives an
+    OpenStack token or calls an OpenStack service endpoint directly.
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+tags:
+  - name: Session
+    description: Browser session lifecycle backed by Keystone authentication.
+  - name: Projects
+    description: Accessible projects and the active project scope.
+  - name: Overview
+    description: Quota-first, partially resilient project summary.
+  - name: Instances
+    description: Server-filtered and paginated project instance inventory.
+paths:
+  /session:
+    get:
+      tags: [Session]
+      summary: Get the current Vantage session
+      operationId: getSession
+      responses:
+        "200":
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    delete:
+      tags: [Session]
+      summary: Sign out and invalidate the server session
+      operationId: deleteSession
+      responses:
+        "204":
+          description: Session deleted
+  /session/login:
+    post:
+      tags: [Session]
+      summary: Authenticate with Keystone through Vantage
+      operationId: createSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "201":
+          description: Session created
+          headers:
+            Set-Cookie:
+              description: Opaque HttpOnly, Secure, SameSite session cookie
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects accessible to the signed-in user
+      operationId: listProjects
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: name
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+      responses:
+        "200":
+          description: Accessible projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /scope:
+    put:
+      tags: [Projects]
+      summary: Set the active project and region
+      operationId: setScope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScopeRequest"
+      responses:
+        "200":
+          description: New project-scoped session context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Scope could not be established
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /overview:
+    get:
+      tags: [Overview]
+      summary: Get the active project's quota-first overview
+      operationId: getProjectOverview
+      responses:
+        "200":
+          description: Overview with independent widget results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectOverview"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /instances:
+    get:
+      tags: [Instances]
+      summary: List instances in the active project
+      operationId: listInstances
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: name
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated project instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstancePage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /instances/{instance_id}:
+    get:
+      tags: [Instances]
+      summary: Get one instance in the active project
+      operationId: getInstance
+      parameters:
+        - $ref: "#/components/parameters/InstanceId"
+      responses:
+        "200":
+          description: Instance detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceDetail"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: vantage_session
+      description: Opaque session identifier; never an OpenStack token.
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    InstanceId:
+      name: instance_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Unauthenticated:
+      description: The Vantage session is missing or expired
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: OpenStack policy denied the active user's request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Resource not found in the active scope
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    RateLimited:
+      description: Too many authentication attempts
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password, domain]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          minLength: 1
+          writeOnly: true
+        domain:
+          type: string
+          minLength: 1
+          maxLength: 255
+    Session:
+      type: object
+      additionalProperties: false
+      required: [user, expires_at, projects, regions]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        active_scope:
+          anyOf:
+            - $ref: "#/components/schemas/Scope"
+            - type: "null"
+        expires_at:
+          type: string
+          format: date-time
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        regions:
+          type: array
+          items:
+            type: string
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        domain_id:
+          type: string
+    Project:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        domain_id:
+          type: string
+        enabled:
+          type: boolean
+    ScopeRequest:
+      type: object
+      additionalProperties: false
+      required: [project_id, region]
+      properties:
+        project_id:
+          type: string
+        region:
+          type: string
+    Scope:
+      type: object
+      additionalProperties: false
+      required: [project, region]
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
+        region:
+          type: string
+    PageInfo:
+      type: object
+      additionalProperties: false
+      required: [has_more]
+      properties:
+        has_more:
+          type: boolean
+        next_cursor:
+          anyOf:
+            - type: string
+            - type: "null"
+    ProjectPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    Quota:
+      type: object
+      additionalProperties: false
+      required: [resource, used]
+      properties:
+        resource:
+          type: string
+          enum: [instances, cores, ram_mib, volumes, gigabytes, floating_ips]
+        used:
+          type: number
+          minimum: 0
+        limit:
+          anyOf:
+            - type: number
+            - type: "null"
+        state:
+          type: string
+          enum: [normal, warning, critical, unknown]
+    WidgetError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        openstack_request_id:
+          type: string
+    ProjectOverview:
+      type: object
+      additionalProperties: false
+      required: [scope, generated_at, quotas, instance_summary, partial_errors]
+      properties:
+        scope:
+          $ref: "#/components/schemas/Scope"
+        generated_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+          default: false
+        quotas:
+          type: array
+          items:
+            $ref: "#/components/schemas/Quota"
+        instance_summary:
+          $ref: "#/components/schemas/InstanceSummary"
+        partial_errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/WidgetError"
+    InstanceSummary:
+      type: object
+      additionalProperties: false
+      required: [total, active, stopped, error]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        active:
+          type: integer
+          minimum: 0
+        stopped:
+          type: integer
+          minimum: 0
+        error:
+          type: integer
+          minimum: 0
+    Instance:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        flavor:
+          type: string
+        image:
+          type: string
+        addresses:
+          type: array
+          items:
+            type: string
+    InstancePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Instance"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    InstanceDetail:
+      allOf:
+        - $ref: "#/components/schemas/Instance"
+        - type: object
+          properties:
+            volumes:
+              type: array
+              items:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                  device:
+                    type: string
+            openstack_request_id:
+              type: string
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        trace_id:
+          type: string
+        openstack_request_id:
+          type: string
