@@ -7,7 +7,7 @@ use. Visual improvement without measurable latency improvement is not enough.
 
 | Signal | Target | Measurement |
 | --- | ---: | --- |
-| First useful project view | p75 <= 1.5 s | Browser RUM, lab LAN |
+| First useful project view | p75 <= 1.5 s | Browser RUM, reference-cloud matrix |
 | Cached route transition | p95 <= 300 ms | Browser RUM |
 | Project overview BFF | p95 <= 800 ms | BFF metrics |
 | Normal list BFF | p95 <= 600 ms | BFF metrics |
@@ -34,7 +34,9 @@ use. Visual improvement without measurable latency improvement is not enough.
 | Glance/Cinder list | 3 s |
 | Entire overview deadline | 4 s |
 
-The values are starting budgets. Goal 1 lab traces determine final settings.
+The values are starting budgets. Goal 1 reference-deployment traces determine
+final settings. Results are separated by region distance, cloud scale, and
+deployment topology so the first home lab does not define the product envelope.
 
 ## Cache Rules
 
@@ -72,5 +74,5 @@ Track:
 - Measure cold and warm cache separately.
 - Test normal, Nova-slow, Neutron-error, and Keystone-expired scenarios.
 - Exercise 1k and 10k synthetic collection sizes.
+- Exercise single- and multi-region latency profiles.
 - Do not start the next goal while the current goal exceeds its SLO.
-

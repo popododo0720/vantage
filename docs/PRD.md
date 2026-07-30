@@ -1,8 +1,8 @@
-# Vantage MVP Product Requirements
+# Vantage Product Requirements
 
 Status: Goal 1 active  
 Target: OpenStack 2026.1  
-Environment: three-node converged lab
+Product scope: comprehensive, deployment-neutral OpenStack web console
 
 ## Why Vantage
 
@@ -13,6 +13,21 @@ The current console is replaced for two equally important reasons:
 
 Vantage is not a visual skin over Horizon. It establishes a new browser-to-BFF
 boundary, a project-first information model, and measurable performance gates.
+
+## Product Scope
+
+Vantage is intended to cover the daily OpenStack workflows served by a
+Skyline- or Horizon-class console without inheriting their information
+architecture or performance constraints.
+
+- Project and administrator workspaces are first-class product surfaces.
+- Domain, region, project, and system scope remain explicit.
+- Keystone, Nova, Neutron, Glance, and Cinder are core services.
+- Heat, Octavia, Swift, and other services can appear when discovered through
+  the service catalog and supported capabilities.
+- Navigation and behavior cannot depend on a deployment tool, node count,
+  converged topology, network backend, or storage backend.
+- The current home lab is an initial reference cloud, not the product model.
 
 ## Product Outcomes
 
@@ -28,13 +43,14 @@ boundary, a project-first information model, and measurable performance gates.
 
 - Exposing OVN NB/SB databases, chassis, or metadata implementation details.
 - Showing a DHCP agent surface in an OVN-native deployment.
-- Building the administrator workspace before the project MVP is proven.
+- Treating the first project MVP as the final product boundary.
 - Depending on Ceph or naming an API after a storage backend.
 - Recreating every Horizon feature before users can try Vantage.
 
 ## MVP Definition
 
-The MVP is complete only when Goals 1 through 4 pass their lab gates.
+The first project MVP is complete only when Goals 1 through 4 pass on supported
+reference clouds.
 
 ### Goal 1: Secure Project Entry
 
@@ -64,14 +80,17 @@ Release gate:
 
 - No Keystone token is observable in browser storage, payloads, or JavaScript.
 - Switching projects cannot leak data from the previous project.
-- First useful view is at most 1.5 seconds at p75 on the lab LAN.
-- Project overview BFF latency is at most 800 ms at p95 under normal lab load.
+- First useful view is at most 1.5 seconds at p75 on the reference-cloud matrix.
+- Project overview BFF latency is at most 800 ms at p95 under the defined
+  reference workload.
 - Nova or Neutron failure does not blank the entire page.
 
-### Goal 2: Compute Lifecycle
+### Goal 2: Provision and Operate Compute
 
 Included:
 
+- Select image, flavor, network, security group, and keypair from server-side
+  lists
 - Create and delete a VM
 - Start, stop, and reboot
 - Asynchronous task feedback
@@ -79,7 +98,7 @@ Included:
 
 Entry condition:
 
-- Goal 1 is used in the lab for at least one review cycle.
+- Goal 1 is used on a reference deployment for at least one review cycle.
 - Goal 1 security and performance gates remain green.
 
 Release gate:
@@ -89,16 +108,18 @@ Release gate:
   shared administrator credential.
 - Duplicate clicks or retries cannot create duplicate destructive operations.
 - noVNC URLs and tokens are short-lived and excluded from logs.
+- Required inputs are explicit and do not depend on deployment-specific
+  defaults.
+- Input collections use server-side filtering and pagination.
 
-### Goal 3: Provisioning Inputs
+### Goal 3: Manage Provisioning Resources
 
 Included:
 
-- Images
-- Flavors
-- Networks
-- Security groups
-- Keypairs
+- Browse project and public images
+- Browse allowed flavors
+- Create and manage project networks and security groups
+- Create and manage keypairs
 
 Release gate:
 
@@ -123,23 +144,36 @@ Release gate:
 
 ## Administrator Workspace
 
-Administrator scope begins after the project MVP:
+The administrator workspace is part of the product scope and begins as staged
+deliveries after the first project MVP:
 
-- All projects
+- Domains and projects
 - Users, groups, and roles
 - Cross-project instances
 - Hypervisors and capacity
+- Images and flavors
 - Neutron resources
 - Volume types and storage backends
-- Service state, default quotas, and audit log
+- Catalog and API capabilities
+- Default quotas
+- Optional audit and observability integrations
 
 Administrator actions still use the administrator's own scoped token. They are
 not a shared proxy for project users.
+
+## Capability-Driven Expansion
+
+- Feature availability is derived from the Keystone service catalog and API
+  capabilities.
+- Unsupported services do not leave dead navigation or hard failures.
+- Heat, Octavia, Swift, and additional services are delivered as independent
+  product goals after the core project and administrator workflows.
+- Multi-region and large-fleet behavior is validated independently from the
+  first home-lab reference environment.
 
 ## Source Baseline
 
 - [openstacksdk microversions](https://docs.openstack.org/openstacksdk/latest/user/microversions)
 - [Compute microversions](https://docs.openstack.org/api-guide/compute/microversions.html)
-- [Kolla-Ansible 2026.1](https://docs.openstack.org/releasenotes/kolla-ansible/2026.1.html)
+- [Keystone service catalog](https://docs.openstack.org/keystone/latest/admin/manage-services.html)
 - [Neutron ML2/OVN](https://docs.openstack.org/neutron/latest/install/ovn/manual_install.html)
-

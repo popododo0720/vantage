@@ -2,8 +2,10 @@
 
 ## Delivery Rule
 
-Each goal produces a lab-deployable result. The team observes real usage,
-records latency and failure behavior, and only then details the next goal.
+Each goal produces a reference-cloud-deployable result. The team observes real
+usage, records latency and failure behavior, and only then details the next
+goal. Goals 1-4 are the first delivery of a comprehensive OpenStack console,
+not the final product boundary.
 
 ## Goal 1: Secure Project Entry
 
@@ -56,22 +58,24 @@ Done when:
 - The browser never downloads a complete collection to paginate locally.
 - 1k and 10k synthetic-resource cases remain usable.
 
-## Goal 2: Compute Lifecycle
+## Goal 2: Provision and Operate Compute
 
 Detail after Goal 1 passes:
 
+- Select image, flavor, network, security group, and keypair from server-side
+  lists
 - VM create/delete
 - Power actions
 - Task status and request tracing
 - noVNC
 
-## Goal 3: Provisioning Inputs
+## Goal 3: Manage Provisioning Resources
 
 Detail after Goal 2 passes:
 
-- Images and flavors
-- Networks and security groups
-- Keypairs
+- Browse project/public images and allowed flavors
+- Create and manage project networks and security groups
+- Create and manage keypairs
 
 ## Goal 4: Connectivity and Storage
 
@@ -83,6 +87,16 @@ Detail after Goal 3 passes:
 
 ## MVP Exit
 
-The MVP exits only after Goals 1-4 pass functional, security, performance, and
-failure-injection checks in the OpenStack lab.
+The first project MVP exits only after Goals 1-4 pass functional, security,
+performance, and failure-injection checks across supported reference clouds.
 
+## Product Continuation
+
+The next goals expand the same product rather than start a separate console:
+
+- Administrator workspace for domains, projects, identity, fleet, quota, and
+  cross-project resources
+- Full image, network, and storage administration
+- Multi-region and large-fleet operation
+- Optional audit and observability integrations
+- Heat, Octavia, Swift, and other catalog-discovered OpenStack services

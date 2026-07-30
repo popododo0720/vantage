@@ -18,7 +18,9 @@ It is an operational console, not a marketing dashboard.
 - Prefer tables, filters, comparison, and clear operation feedback.
 - Preserve context through list, detail, and mutation flows.
 - Use OpenStack resource names; do not expose OVN implementation internals.
-- Do not create a DHCP agent surface for an OVN-native deployment.
+- Derive service navigation from the Keystone catalog and API capabilities.
+- Keep node count, deployment topology, and backend names out of the product IA.
+- Do not create default project navigation for network-backend internals.
 
 ## Project MVP Navigation
 
@@ -33,6 +35,23 @@ It is an operational console, not a marketing dashboard.
 - Volumes
 - API access
 - Project settings
+
+## Administrator Navigation
+
+- Domains and projects
+- Users, groups, and roles
+- Cross-project instances
+- Hypervisors, aggregates, and capacity
+- Images and flavors as separate service resources
+- Neutron resources
+- Volumes, volume types, and storage backends
+- Catalog and API capabilities
+- Default quotas
+- Optional integrations
+
+The project and administrator workspaces share design tokens and interaction
+patterns, but never share an implicit scope. Service-specific navigation appears
+only when the catalog and capability checks support it.
 
 ## Required States
 
@@ -68,4 +87,3 @@ Every primary view accounts for:
 
 Design file:
 [Vantage Console in Penpot](https://design.penpot.app/#/workspace?team-id=1c48efe5-2f9f-81cd-8007-beddeed3764c&file-id=8694f143-a620-8054-8008-675feb27ac54&page-id=8694f143-a620-8054-8008-675feb27ac55)
-
