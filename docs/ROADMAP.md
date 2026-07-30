@@ -3,11 +3,11 @@
 ## Delivery Rule
 
 Each goal produces a reference-cloud-deployable result. The team observes real
-usage, records latency and failure behavior, and only then details the next
-goal. Goals 1-4 are the first delivery of a comprehensive OpenStack console,
-not the final product boundary.
+usage, records latency and failure behavior, and only then implements the next
+goal. Goal 1 is the initial usable MVP. Goals 2-4 expand the same console from
+real use rather than hiding a large launch behind the word MVP.
 
-## Goal 1: Secure Project Entry
+## Goal 1: Initial Usable Project MVP
 
 ### Slice 1.1: Session Boundary
 
@@ -49,6 +49,7 @@ Done when:
 ### Slice 1.4: Instance Inventory
 
 - Server-side filters
+- Page sizes 10, 25, 50, and 100 with default 25
 - Cursor/marker pagination
 - List and detail
 - OpenStack request ID propagation
@@ -58,57 +59,84 @@ Done when:
 - The browser never downloads a complete collection to paginate locally.
 - 1k and 10k synthetic-resource cases remain usable.
 
-## Goal 2: Provision and Operate Compute
+### Slice 1.5: Provisioning Inputs and Create
+
+- Server-side image, Flavor, network, security-group, and keypair collections
+- Images and keypairs inventory pages
+- Three-step Create Instance flow
+- Quota preflight without replacing OpenStack policy enforcement
+
+Done when:
+
+- A VM can be created without deployment-specific defaults.
+- Public and project resources remain distinguishable.
+- Private key material is shown only once when generated.
+
+### Slice 1.6: Lifecycle and Recovery
+
+- Edit display name
+- Delete confirmation with explicit volume and Floating-IP outcomes
+- Power, reboot, pause, suspend, resume, shelve, and unshelve actions
+- Resize, `VERIFY_RESIZE`, confirm, and revert
+- Operation tracking and request IDs
+
+Done when:
+
+- Duplicate destructive operations are idempotently rejected.
+- Available actions follow capability, policy, and current server state.
+
+### Slice 1.7: Connectivity, Storage, and Console
+
+- Attach/detach supported NICs
+- Edit supported Neutron port properties
+- Allocate/associate/disassociate Floating IPs
+- Attach/detach Cinder volumes
+- Short-lived noVNC console
+
+Done when:
+
+- Multi-interface Floating IP targeting is explicit.
+- The BFF remains Neutron/Cinder backend neutral.
+- Console URLs and tokens never enter logs or persistent storage.
+
+### Goal 1 Exit
+
+- Functional, security, performance, and failure-injection checks pass.
+- The MVP is used on the reference cloud for one review cycle.
+- No application work for Goal 2 begins until the user confirms Goal 1.
+
+## Goal 2: Full Project Networking
 
 Detail after Goal 1 passes:
 
-- Select image, flavor, network, security group, and keypair from server-side
-  lists
-- VM create/delete
-- Power actions
-- Task status and request tracing
-- noVNC
+- Networks, subnets, ports, routers, Floating IPs
+- Security groups and rules
+- QoS and RBAC policies
+- Capability-gated Octavia load balancers
 
-## Goal 3: Manage Provisioning Resources
+## Goal 3: Project Storage Depth
 
 Detail after Goal 2 passes:
 
-- Browse project/public images and allowed flavors
-- Create and manage project networks and security groups
-- Create and manage keypairs
+- Volumes, snapshots, and backups
+- Full attachment lifecycle
+- Backend-neutral storage behavior
 
-## Goal 4: Connectivity and Storage
+## Goal 4: Administrator and Identity
 
 Detail after Goal 3 passes:
 
-- Floating IP lifecycle
-- Cinder volume attach/detach
-- Backend-neutral behavior
-
-## MVP Exit
-
-The first project MVP exits only after Goals 1-4 pass functional, security,
-performance, and failure-injection checks across supported reference clouds.
-
-## Product Continuation
-
-The next goals expand the same product rather than start a separate console:
-
-### Stage 5: Administrator and Identity
-
 - Explicit system, domain, and project token scope
 - Domains, projects, users, groups, and roles
+- Role assignments and project quotas
 - Cross-project instances, host aggregates, and Placement resource classes
 - Multi-region and large-fleet operation
-
-### Stage 6: Image, Network, Quota, and Storage Administration
-
 - Separate Nova flavor and Glance image navigation
 - Neutron resource administration
-- Cinder quota, volume type, and backend administration
+- Cinder quota, volume type, backend, and QoS-spec administration
 - Optional audit and observability integrations
 
-### Stage 7: Catalog Services
+## Goal 5+: Catalog Services
 
 - Capability-gated Heat, Octavia, Swift, and other discovered services
 - Explicit absent, unsupported, degraded, and policy-limited states
