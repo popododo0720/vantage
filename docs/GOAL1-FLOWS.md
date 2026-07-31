@@ -54,7 +54,7 @@ denied, partial failure, or stale-data state.
 | `/quotas` | Valid active scope | `GET /api/v1/quotas` | Detailed service quota table |
 | `/instances` | Valid active scope | `GET /api/v1/instances` | Filtered cursor page |
 | `/instances/:id` | Valid active scope | List state plus `GET /api/v1/instances/:id` | Right drawer over preserved list |
-| `/instances/new` | Valid active scope and create capability | Server-side Images, Flavors, networks, security groups, and keypairs | Three-step create flow |
+| `/instances/new` | Valid active scope and create capability | Server-side Images, Flavors, networks, security groups, and keypairs | Four-step create flow |
 | `/images` | Valid active scope | `GET /api/v1/images` | Project/public image inventory |
 | `/keypairs` | Valid active scope | `GET /api/v1/keypairs` | Project keypair inventory |
 | `/networks` | Valid active scope | `GET /api/v1/networks` | Goal 1 network selector/inventory |
@@ -245,7 +245,7 @@ Detailed pending, success, conflict, policy, and rollback behavior is in
    reset after each page-size change.
 5. Open and close an instance drawer with mouse, keyboard, and browser Back.
    Verify no list-level `Rows` control appears in the drawer.
-6. Create an instance through all three steps and verify quota preflight,
+6. Create an instance through all four steps and verify quota preflight,
    idempotent submission, operation tracking, and final Nova state.
 7. Exercise every state-allowed lifecycle action, including resize confirm and
    revert, and verify denied actions remain denied without admin retry.

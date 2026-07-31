@@ -65,6 +65,9 @@ Reference:
 - Responses include the page size, result range, navigable page numbers,
   previous/next availability, optional reliable totals, and an upstream
   request ID when available.
+- Previous/next availability is response metadata used to enable the two
+  icon-only edge chevrons. It never introduces visible `Previous`, `Prev`, or
+  `Next` text buttons.
 
 ## Mutation Contract
 

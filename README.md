@@ -66,6 +66,8 @@ Goal 1 is the active delivery target.
 - [MVP mutation interaction specification](docs/MVP-INTERACTIONS.md)
 - [Resource screen and interaction contract](docs/RESOURCE-INTERACTIONS.md)
 - [CLI and API parity contract](docs/CLI-PARITY.md)
+- [MVP planning and design readiness](docs/MVP-READINESS.md)
+- [Penpot design completion audit](docs/DESIGN-QA.md)
 - [Goal 1 BFF OpenAPI](api/openapi.yaml)
 
 ## Working Surfaces
@@ -73,9 +75,13 @@ Goal 1 is the active delivery target.
 - [Notion planning hub](https://app.notion.com/p/3ade0ff2ad2481358105ffc40c05a679)
 - [Penpot design file](https://design.penpot.app/#/workspace?team-id=1c48efe5-2f9f-81cd-8007-beddeed3764c&file-id=8694f143-a620-8054-8008-675feb27ac54&page-id=8694f143-a620-8054-8008-675feb27ac55)
 
-The Penpot file is organized by functional page: Auth, Dashboard, Compute,
-Network, Storage, and Administration. `Dashboard` is the design-file grouping;
-the product navigation and browser route remain `Overview` and `/overview`.
+The Penpot file is organized by functional page. Auth and Dashboard remain
+compact. Compute, Network, Storage, and Administration each have lightweight
+review pages grouped by resource plus a canonical editable `X - ... Prototype`
+page that retains the component layers and prototype transitions. The review
+pages are mirrors and are not counted as additional product states. `Dashboard`
+is the design-file grouping; the product navigation and browser route remain
+`Overview` and `/overview`.
 
 ## Compatibility Baseline
 

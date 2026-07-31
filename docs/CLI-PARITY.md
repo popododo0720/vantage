@@ -128,7 +128,7 @@ project-user resources and do not appear in the user navigation.
 | Volume backup | Create full/incremental or from snapshot, name/description/container/AZ/properties; edit supported fields/state, restore, export/import record, delete/force-delete |
 | Volume type (admin) | Name/description, public/private access, project access, extra specs, multiattach/cacheable/replicated/AZ flags, encryption provider/cipher/key size/control location; set/unset; delete |
 | QoS spec (admin) | Consumer and properties, associate/disassociate volume types, set/unset, delete/force-delete |
-| Storage backend (admin) | Read capacity, state, capabilities, pools, host/cluster and driver data. No create/edit/delete unless a deployed service API explicitly advertises it |
+| Storage backend (admin) | Read capacity, state, capabilities, pools, host/cluster and driver data; policy-gated service enable/disable, freeze/thaw, and capability-gated replication failover. No backend create/edit/delete unless a deployed service API explicitly advertises it |
 
 The design does not assume Ceph. Backend-specific fields are capability-gated
 so a later Ceph deployment can be supported without changing the core model.
@@ -142,7 +142,7 @@ so a later Ceph deployment can be supported without changing the core model.
 | Group | Create/edit name and description, add/remove users, inspect assignments, delete |
 | Role | Create/edit when supported, inspect implied roles and assignments, delete |
 | Role assignment | Grant/revoke user or group roles at system, domain, project, or supported target scope; inherited assignment where supported |
-| Project quota | Read effective/default/usage values; edit and reset Nova, Neutron, Cinder, and advertised service quotas independently |
+| Project quota | Read effective/default/usage values; edit every field returned by Nova, Neutron, Cinder, and advertised quota providers independently; `Delete overrides` restores provider defaults without deleting the project; preserve provider default/unlimited semantics |
 | All instances | Cross-project server-side filters and pagination, project/owner context, policy-gated lifecycle actions and delete |
 
 Project-scoped users never see system-wide collections. Administration routes
@@ -159,6 +159,32 @@ policy-authorized server-side requests.
   actionable error state with the request ID.
 - Any option that is available in CLI testing but absent from the web form must
   be added or assigned a non-Available ledger state before release.
+
+## Goal 1 Reconciliation Ledger
+
+This is the current design and browser-contract ledger. `Contracted` means the
+field/action is represented in the OpenAPI and interaction design; it does not
+claim that implementation exists. Goal 1 cannot leave planning until every row
+is `Contracted` or has an explicit non-Available state.
+
+| Resource | Goal 1 operations | Current state | Evidence |
+| --- | --- | --- | --- |
+| Session and scope | Sign in/out, enumerate scopes, select project/region, expire session | Contracted | `POST/GET/DELETE /session`, `PUT /scope`; Login, Project Selection, Project Switcher |
+| Project quotas | Read Nova, Neutron, and Cinder used/reserved/limit with independent failures | Contracted | `GET /overview`, `GET /quotas`; Project Overview, Quota Details |
+| Instance | List/show/create, rename, lifecycle actions, resize/confirm/revert, delete preview/delete, noVNC | Contracted | `/instances*`, `/operations*`; Compute Goal 1 boards |
+| Image | Server-filtered project-visible inventory for provisioning | Contracted | `GET /images`; Images board |
+| Flavor | Server-filtered project-allowed inventory for provisioning | Contracted | `GET /flavors`; Create Instance descriptors |
+| Key pair | List, generate/import, one-time private key, delete | Contracted | `/keypairs*`; Key Pairs board |
+| Network/security group | Server-filtered inventories used by provisioning | Contracted | `GET /networks`, `GET /security-groups` |
+| NIC and port | List, attach/detach, supported MAC/fixed-IP/security-group/QoS edits | Contracted | `/instances/{id}/interfaces*`, `PATCH /ports/{id}`; Instance Network and NIC Edit |
+| Floating IP | List, allocate, associate/move/disassociate, release | Contracted | `/floating-ips*`; Instance Network |
+| Volume relationship | List project volumes, list attachments, attach/detach | Contracted | `/volumes`, `/instances/{id}/volume-attachments*`; Instance Detail Storage |
+| noVNC | Create short-lived console session, expire, reconnect | Contracted | `POST /instances/{id}/console`; noVNC board |
+
+Full network CRUD, storage depth, and administrator CRUD remain design-ahead
+Goals 2-4 and do not make Goal 1 implementation larger. Their rows above remain
+in the broader parity tables so later goals cannot silently omit CLI/API
+options.
 
 ## Release Gate
 

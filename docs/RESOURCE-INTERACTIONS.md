@@ -188,6 +188,9 @@ absence removes only this navigation group.
 - Create from blank, image, snapshot, volume, or backup.
 - Settings: name, description, metadata, bootable/read-only flags.
 - Advanced: type, AZ, scheduler hints, extend, retype/migrate, transfer.
+- Project-scoped settings never expose a backend host, pool, driver-specific
+  name, or administrator migration destination. Those are separate
+  administrator capabilities and remain backend-neutral.
 - Relationships: attach/detach, snapshot, backup.
 - Delete/force-delete previews attachments, snapshots, backups, transfers, and
   current state. Detach never implies Delete.
@@ -223,8 +226,13 @@ absence removes only this navigation group.
 ### Storage Backends - Goal 4 Administration
 
 - Read-only capacity, state, capabilities, pools, host/cluster, and driver data.
-- No create/edit/delete unless a deployed service API explicitly advertises
-  one. The UI remains backend-neutral and does not assume Ceph.
+- No backend create/edit/delete unless a deployed service API explicitly
+  advertises one.
+- Cinder service operations expose policy-gated enable/disable with reason,
+  freeze/thaw, and replication failover only when the backend advertises the
+  capability. Host and binary identifiers remain immutable.
+- The UI remains backend-neutral, works with the initial non-Ceph deployment,
+  and does not hard-code Ceph/RBD assumptions.
 
 ## Identity and Administration - Goal 4
 
@@ -234,8 +242,13 @@ absence removes only this navigation group.
   overview.
 - Settings: name, description, enabled state, domain-compatible fields,
   tags/properties.
+- Create validates the selected domain, optional hierarchy capability, and
+  duplicate-name conflict. A rejected create preserves entered values and shows
+  the upstream service and OpenStack request ID.
 - Tabs: members/role assignments, quotas, and discovered resources.
-- Delete uses a typed impact preview across Identity and service resources.
+- Delete uses a typed impact preview across Identity and service resources,
+  does not pretend to cascade-delete service resources, and is always distinct
+  from quota `Delete overrides`.
 
 ### Users
 
@@ -264,8 +277,32 @@ absence removes only this navigation group.
 ### Project Quotas
 
 - Show used, reserved, effective/default, and limit separately.
-- Edit/reset Nova, Neutron, Cinder, and discovered service quotas independently.
+- Edit Nova, Neutron, Cinder, and discovered service quotas independently.
+- `Delete overrides` removes only explicit service overrides and restores the
+  current provider defaults without deleting the project or its resources.
+- Do not hard-code a reduced field list. Nova includes instances, cores, RAM,
+  server groups/members, key pairs, and metadata items when returned by the
+  negotiated microversion. Neutron includes networks, subnets, subnet pools,
+  ports, routers, Floating IPs, security groups/rules, RBAC policies, and
+  extension-advertised quota resources. Cinder includes volumes, snapshots,
+  capacity, backups, backup capacity, groups, per-volume capacity, and dynamic
+  per-volume-type limits.
+- Capability-discovered quota providers such as Octavia use their own service
+  section and preserve the provider's `null`/default and `-1`/unlimited
+  semantics.
 - Unlimited values use the exact service representation and are never guessed.
+- The cross-project list exposes `Edit quotas` as a primary command. Each row
+  also exposes `View quota usage`, `Edit quotas`, and `Delete overrides`;
+  quota management is never presented as read-only to an authorized
+  administrator.
+- Editing opens a dedicated settings surface, validates proposed limits against
+  current usage, reviews the per-service diff, and applies each service change
+  independently so a partial failure does not erase successful updates.
+- Quotas are not independently deletable resources. Although an upstream reset
+  API may use HTTP `DELETE`, the UI command is `Delete overrides`: it deletes
+  or unsets only explicit service quota overrides and restores current
+  defaults. The confirmation must state that the project and its resources are
+  retained.
 
 ### Cross-Project Compute and Infrastructure
 

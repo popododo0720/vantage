@@ -170,7 +170,9 @@ or operations.
 The administrator overview always declares SYSTEM, DOMAIN, or PROJECT scope and
 can aggregate all projects. It has no global `Create project` shortcut; project,
 user, group, and role changes begin in their dedicated Identity sections. It
-also has no manual refresh control.
+also has no manual refresh control. `Create project` belongs only to the
+dedicated Projects list and validates domain, optional hierarchy capability,
+policy, and duplicate-name conflict responses before returning to that list.
 
 ## Required States
 
@@ -215,17 +217,88 @@ historical exploration. Production screen boards are organized as follows:
 | --- | --- |
 | `01 - Auth` | 3: Login, Login Error, Project Selection |
 | `02 - Dashboard` | 4: Project Overview, Project Switcher, Quota Details, Dashboard States |
-| `03 - Compute` | 20: Instances, Instance Row Actions, noVNC, Create Instance steps 1-4, Images, Key Pairs, Instances Page Size, Instance Detail, Instance Delete Confirm, Resource Delete Pattern, Actions EN/KO, Resize Verify, Resize, Edit Name, Instance Network, NIC Edit |
-| `04 - Network` | 14: Networks, Network Detail, Network Row Actions, Network Settings, Network Delete Confirm, Port Settings, RBAC Policies, Load Balancers, QoS Policies, Security Groups, Routers, Ports, Subnets, Floating IPs |
-| `05 - Storage` | 9: Volumes, Volume Detail, Volume Row Actions, Volume Settings, Volume Delete Confirm, Volume Snapshots, Snapshot Row Actions, Volume Backups, Backup Row Actions |
-| `06 - Administration` | 11: Admin Overview, QoS Specs, Storage Backends, Volume Types, Projects, Users, Groups, Role Assignments, Project Quotas, Network RBAC, All Instances |
+| `03A - Instances & Actions` through `03C - Networking & Attachments` | 31 lightweight preview boards grouped as Instances/Actions (12), Launch/Images/Keys (9), and Networking/Attachments (10) |
+| `03X - Compute Prototype` | 31 canonical editable and interactive Compute states mirrored by the three preview pages |
+| `04A - Networks & Subnets` through `04D - Floating IPs & Load Balancers` | 66 lightweight preview boards grouped as Networks/Subnets (13), Ports/Routers (15), Security/QoS/RBAC (22), and Floating IPs/Load Balancers (16) |
+| `04X - Network Prototype` | 66 canonical editable and interactive Network states mirrored by the four preview pages |
+| `05A - Volumes & Attachments` and `05B - Snapshots & Backups` | 25 lightweight preview boards grouped as Volumes/Attachments (9) and Snapshots/Backups (16) |
+| `05X - Storage Prototype` | 25 canonical editable and interactive Storage states mirrored by the two preview pages |
+| `06A - Projects & Quotas` through `06F - Network Administration` | 64 lightweight preview boards grouped as Projects/Quotas (13), Users/Groups (11), Roles/Membership (13), Compute Administration (9), Storage Administration (13), and Network Administration (5) |
+| `06X - Administration Prototype` | 64 canonical editable and interactive Administration states mirrored by the six preview pages |
+
+The current production-target Penpot planning inventory contains 193 unique
+screen states: Auth 3, Dashboard 4, Compute 31, Network 66, Storage 25, and
+Administration 64. All `A` through `F` review pages are lightweight raster
+mirrors for faster page-level scanning. They are not counted again; editable
+layers and prototype transitions remain in the corresponding `X` page.
+Administration makes the authorized create, inspect, edit, relationship,
+lifecycle, and delete/revoke operations visible instead of leaving them implied
+by list rows. `Vantage - Admin Project Create` is reachable only from the
+Projects list and covers domain, hierarchy capability, metadata, conflict, and
+policy-denial states. The Project Quotas list exposes `Edit quotas` directly,
+and every quota row exposes `View quota usage`, `Edit quotas`, and `Delete
+overrides`.
+The settings surface contains editable values for every service-advertised
+field, including `-1`/unlimited and provider-discovered fields, alongside
+review/apply.
+`Delete overrides` removes only service-specific overrides and restores current
+defaults; it never deletes the project or any resource.
+
+The current Administration audit covers 64 boards and 1,222 click transitions,
+with zero boards lacking an interaction, zero unresolved same-file
+destinations, zero severe text-overflow findings, and zero shapes outside their
+owning board. Its common pagination state specifies server-side
+`10`/`25`/`50`/`100` row sizes and numbered navigation.
+Its six preview pages contain exactly 13/11/13/9/13/5 boards in stable
+three-column grids.
+
+The canonical Network prototype audit covers 66 boards, 12,839 shapes, and
+1,888 click transitions, with zero boards lacking an interaction and zero
+unresolved same-page destinations. Its four preview pages contain exactly
+13/15/22/16 boards in a stable three-column grid. The Penpot file validator
+reports zero errors after all page splits.
+
+The eleven added Compute states make Goal 1 resource operations inspectable:
+key-pair generation/import, one-time private-key handling, and deletion; NIC
+attach and detach confirmation; Floating IP association/allocation,
+disassociation, and release; and volume attach, detach confirmation, and
+concurrent-change recovery. The current Compute prototype contains 6,761
+shapes and 429 click transitions across 31 boards, with no unresolved same-file
+destination, invisible text layer, or shape outside its board in the automated
+audit. Its three preview pages contain exactly 12/9/10 boards.
+
+The canonical Storage prototype contains 25 boards, 4,744 shapes, and 307 click
+transitions. No board lacks an interaction, no same-file destination is
+unresolved, and no invisible text layer or shape lies outside its owning board.
+Its two preview pages contain exactly 9/16 boards in stable three-column grids.
+
+The Penpot prototype connects the inspectable administrator path:
+
+`Project Quotas -> Edit quotas -> Project Quota Settings -> Review changes
+-> Apply changes`
+
+The destructive alternatives are separately connected:
+
+- `Project Quota Settings -> Delete overrides -> Delete Quota Overrides Confirm`
+- `Quota row menu -> View quota usage`, `Edit quotas`, or `Delete overrides`
+- `Project row menu -> Edit project -> Project Settings -> Review changes ->
+  Apply changes`
+- `Project row menu -> Manage members -> Project Membership & Roles`
+- `Project row menu -> Edit quotas` or `Delete project -> Project Delete
+  Confirm`
 
 `Dashboard` is only the Penpot page grouping. The product label and route remain
 `Overview` and `/overview`. Project screens use Neutron and Cinder vocabulary;
 they never expose OVN chassis/databases or a Ceph/RBD backend.
+Project Volume Settings do not include an administrator tab, backend host/pool,
+or migration destination; those controls belong only to a policy- and
+capability-gated Administration surface.
 
 Design file:
 [Vantage in Penpot](https://design.penpot.app/#/workspace?team-id=1c48efe5-2f9f-81cd-8007-beddeed3764c&file-id=8694f143-a620-8054-8008-675feb27ac54&page-id=8694f143-a620-8054-8008-675feb27ac55)
 
 Detailed transitions and command outcomes:
 [Goal 1 screen and interaction specification](GOAL1-FLOWS.md)
+
+Requirement-to-board completion evidence:
+[Penpot design completion audit](DESIGN-QA.md)

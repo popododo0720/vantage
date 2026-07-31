@@ -24,7 +24,9 @@ contract and are represented in the Goal 1 OpenAPI.
 
 ## Common List Pagination
 
-- Every resource list, including admin lists, uses the same visible contract:
+- Every Goal 1 project resource list uses the same visible contract. Design-ahead
+  administrator lists reuse this component in Goal 4; they are not part of the
+  Goal 1 implementation or acceptance scope:
   `Rows 10/25/50/100`, a result range, and numbered pagination
   `‹ 1 2 3 ... ›`.
 - `Previous`, `Prev`, and `Next` text buttons are prohibited. Only the

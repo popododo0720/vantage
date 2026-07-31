@@ -156,6 +156,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -235,6 +237,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResourceContract"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -301,6 +305,8 @@ paths:
           $ref: "#/components/responses/AcceptedOperation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -319,6 +325,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/InstanceDetail"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -340,6 +348,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -367,6 +377,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -387,6 +399,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeletePreview"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -409,6 +423,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -433,6 +449,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -451,6 +469,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -469,6 +489,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -496,6 +518,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConsoleSession"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -522,6 +546,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Operation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -551,6 +577,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ImagePage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
   /flavors:
@@ -573,6 +601,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FlavorPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
   /keypairs:
@@ -595,6 +625,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/KeyPairPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
     post:
@@ -619,6 +651,8 @@ paths:
                 $ref: "#/components/schemas/CreatedKeyPair"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -639,6 +673,8 @@ paths:
       responses:
         "204":
           description: Keypair deleted
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -666,6 +702,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NetworkPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
   /security-groups:
@@ -687,6 +725,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SecurityGroupPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
   /instances/{instance_id}/interfaces:
@@ -696,6 +736,8 @@ paths:
       operationId: listInstanceInterfaces
       parameters:
         - $ref: "#/components/parameters/InstanceId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
       responses:
         "200":
           description: Attached Nova interfaces backed by Neutron ports
@@ -703,6 +745,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/InterfacePage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -726,6 +770,8 @@ paths:
           $ref: "#/components/responses/AcceptedOperation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -743,6 +789,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -769,6 +817,8 @@ paths:
           $ref: "#/components/responses/AcceptedOperation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -799,6 +849,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FloatingIPPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
     post:
@@ -819,6 +871,8 @@ paths:
           $ref: "#/components/responses/AcceptedOperation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -843,6 +897,8 @@ paths:
           $ref: "#/components/responses/AcceptedOperation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -860,6 +916,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -895,6 +953,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VolumePage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
   /instances/{instance_id}/volume-attachments:
@@ -904,6 +964,8 @@ paths:
       operationId: listInstanceVolumeAttachments
       parameters:
         - $ref: "#/components/parameters/InstanceId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
       responses:
         "200":
           description: Current Cinder/Nova attachment state
@@ -911,6 +973,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VolumeAttachmentPage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
@@ -934,6 +998,8 @@ paths:
           $ref: "#/components/responses/AcceptedOperation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
@@ -951,6 +1017,8 @@ paths:
       responses:
         "202":
           $ref: "#/components/responses/AcceptedOperation"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":

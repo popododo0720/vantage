@@ -38,6 +38,30 @@ The values are starting budgets. Goal 1 reference-deployment traces determine
 final settings. Results are separated by region distance, cloud scale, and
 deployment topology so the first home lab does not define the product envelope.
 
+## Reference Workload Matrix
+
+Each release candidate runs the same matrix. Results are reported separately;
+one fast home-lab result cannot hide a slow large-cloud result.
+
+| Profile | Collection shape | Concurrency | Network profile | Required scenarios |
+| --- | --- | ---: | --- | --- |
+| Lab-small | 100 instances, 100 ports, 100 volumes | 5 active sessions | LAN, <= 2 ms RTT | Cold/warm entry, project switch, normal mutations |
+| Project-1k | 1k instances, 2k ports, 1k volumes | 20 active sessions | 20 ms RTT | Filter, sort, page 1/middle/last, task polling |
+| Fleet-10k | 10k instances, 20k ports, 10k volumes | 50 active sessions | 50 ms RTT | Bounded pagination, cache isolation, admin list fan-out |
+| Multi-region | Project-1k in two regions | 20 active sessions | 20/100 ms RTT | Region switch, independent cache keys, partial region failure |
+
+For every profile:
+
+1. Run at least 30 cold-cache and 100 warm-cache samples per measured route.
+2. Record browser TTFB, FCP/LCP, interaction latency, BFF duration, upstream
+   service duration, cache state, region, project, page size, and request ID.
+3. Run normal, Nova-slow, Neutron-error, Cinder-timeout, Keystone-expired,
+   policy-403, and rate-limited scenarios.
+4. Verify that list requests never download a complete collection and that
+   project/region switches never reuse another scope's rows.
+5. Fail the gate when a profile exceeds an SLO; averages across profiles do not
+   convert a failing profile into a pass.
+
 ## Cache Rules
 
 Cache keys include:
