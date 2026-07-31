@@ -21,6 +21,8 @@ tags:
     description: Quota-first, partially resilient project summary.
   - name: Quotas
     description: Detailed finite quota set for the active project and region.
+  - name: ResourceContracts
+    description: Capability, mutability, and action descriptors for Goal 1 resources.
   - name: Instances
     description: Project instance inventory, provisioning, and lifecycle.
   - name: Operations
@@ -119,7 +121,7 @@ paths:
       operationId: listProjects
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -200,6 +202,43 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /resource-contracts/{resource_type}:
+    get:
+      tags: [ResourceContracts]
+      summary: Get fields and actions supported for a Goal 1 resource
+      operationId: getResourceContract
+      parameters:
+        - name: resource_type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - instance
+              - image
+              - flavor
+              - keypair
+              - network
+              - port
+              - security_group
+              - floating_ip
+              - volume
+        - name: resource_id
+          in: query
+          description: Optional resource used to resolve state-dependent actions.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active-scope field and action contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceContract"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /instances:
     get:
       tags: [Instances]
@@ -207,7 +246,7 @@ paths:
       operationId: listInstances
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -334,6 +373,24 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /instances/{instance_id}/delete-preview:
+    get:
+      tags: [Instances]
+      summary: Preview bounded dependency outcomes before deleting an instance
+      operationId: previewInstanceDelete
+      parameters:
+        - $ref: "#/components/parameters/InstanceId"
+      responses:
+        "200":
+          description: Dependency and retention preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeletePreview"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /instances/{instance_id}/actions:
     post:
       tags: [Instances]
@@ -476,7 +533,7 @@ paths:
       operationId: listImages
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -503,7 +560,7 @@ paths:
       operationId: listFlavors
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -525,7 +582,7 @@ paths:
       operationId: listKeyPairs
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -593,7 +650,7 @@ paths:
       operationId: listNetworks
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -618,7 +675,7 @@ paths:
       operationId: listSecurityGroups
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -725,7 +782,7 @@ paths:
       operationId: listFloatingIPs
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: status
           in: query
           schema:
@@ -816,7 +873,7 @@ paths:
       operationId: listVolumes
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -932,11 +989,16 @@ components:
         type: integer
         enum: [10, 25, 50, 100]
         default: 25
-    Cursor:
-      name: cursor
+    PageNumber:
+      name: page
       in: query
+      description: |
+        One-based visible page number. The BFF resolves it through a
+        scope- and query-bound upstream cursor/marker chain.
       schema:
-        type: string
+        type: integer
+        minimum: 1
+        default: 1
     InstanceId:
       name: instance_id
       in: path
@@ -1108,17 +1170,184 @@ components:
           $ref: "#/components/schemas/Project"
         region:
           type: string
+    SupportState:
+      type: string
+      enum:
+        - available
+        - immutable
+        - capability_gated
+        - policy_gated
+        - state_gated
+        - upstream_absent
+        - deferred
+    FieldDescriptor:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - label_key
+        - group
+        - value_type
+        - mutable
+        - support_state
+      properties:
+        key:
+          type: string
+        label_key:
+          type: string
+        group:
+          type: string
+          enum: [basic, advanced, access, relationship]
+        service:
+          type: string
+        api_field:
+          type: string
+        sdk_argument:
+          type: string
+        cli_equivalent:
+          type: string
+        value_type:
+          type: string
+          enum:
+            - string
+            - integer
+            - number
+            - boolean
+            - uuid
+            - select
+            - multiselect
+            - key_value
+            - array
+            - secret
+        required:
+          type: boolean
+          default: false
+        mutable:
+          type: boolean
+        can_unset:
+          type: boolean
+          default: false
+        sensitive:
+          type: boolean
+          default: false
+        default_value: {}
+        constraints:
+          type: object
+          additionalProperties: true
+        capability:
+          type: string
+        microversion:
+          type: string
+        support_state:
+          $ref: "#/components/schemas/SupportState"
+        reason:
+          type: string
+    ActionDescriptor:
+      type: object
+      additionalProperties: false
+      required: [key, label_key, kind, support_state]
+      properties:
+        key:
+          type: string
+        label_key:
+          type: string
+        kind:
+          type: string
+          enum:
+            - edit
+            - set_unset
+            - relationship
+            - lifecycle
+            - clone
+            - delete
+            - force_delete
+        destructive:
+          type: boolean
+          default: false
+        typed_confirmation:
+          type: boolean
+          default: false
+        capability:
+          type: string
+        microversion:
+          type: string
+        support_state:
+          $ref: "#/components/schemas/SupportState"
+        reason:
+          type: string
+    ResourceContract:
+      type: object
+      additionalProperties: false
+      required: [resource_type, fields, actions, generated_at]
+      properties:
+        resource_type:
+          type: string
+        service:
+          type: string
+        resource_id:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldDescriptor"
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionDescriptor"
+        generated_at:
+          type: string
+          format: date-time
     PageInfo:
       type: object
       additionalProperties: false
-      required: [has_more]
+      required:
+        - number
+        - size
+        - item_from
+        - item_to
+        - has_previous
+        - has_next
+        - navigable_pages
       properties:
-        has_more:
-          type: boolean
-        next_cursor:
+        number:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          enum: [10, 25, 50, 100]
+        item_from:
+          type: integer
+          minimum: 0
+          description: One-based first item, or 0 for an empty page.
+        item_to:
+          type: integer
+          minimum: 0
+          description: One-based final item, or 0 for an empty page.
+        total_items:
           anyOf:
-            - type: string
+            - type: integer
+              minimum: 0
             - type: "null"
+          description: Null when the upstream service has no reliable bounded count.
+        total_pages:
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
+          description: Null when total_items is unknown.
+        has_previous:
+          type: boolean
+        has_next:
+          type: boolean
+        navigable_pages:
+          type: array
+          description: Page numbers that the BFF can resolve without an unbounded scan.
+          items:
+            type: integer
+            minimum: 1
+          uniqueItems: true
+        openstack_request_id:
+          type: string
     ProjectPage:
       type: object
       additionalProperties: false
@@ -1289,6 +1518,75 @@ components:
                     type: string
             openstack_request_id:
               type: string
+    DeleteDependency:
+      type: object
+      additionalProperties: false
+      required: [type, id, relationship, default_outcome]
+      properties:
+        type:
+          type: string
+          enum: [boot_volume, volume, port, floating_ip]
+        id:
+          type: string
+        name:
+          type: string
+        relationship:
+          type: string
+        default_outcome:
+          type: string
+          enum:
+            - retain
+            - detach
+            - disassociate
+            - release
+            - delete
+            - blocked
+        selectable_outcomes:
+          type: array
+          items:
+            type: string
+            enum:
+              - retain
+              - detach
+              - disassociate
+              - release
+              - delete
+          uniqueItems: true
+        reason:
+          type: string
+    DeletePreview:
+      type: object
+      additionalProperties: false
+      required:
+        - resource_type
+        - resource_id
+        - resource_name
+        - dependencies
+        - blockers
+        - typed_confirmation_required
+      properties:
+        resource_type:
+          type: string
+          const: instance
+        resource_id:
+          type: string
+          format: uuid
+        resource_name:
+          type: string
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeleteDependency"
+        blockers:
+          type: array
+          items:
+            type: string
+        typed_confirmation_required:
+          type: boolean
+        openstack_request_ids:
+          type: array
+          items:
+            type: string
     NetworkAttachmentRequest:
       type: object
       additionalProperties: false
@@ -1311,6 +1609,9 @@ components:
           format: uuid
         fixed_ip:
           type: string
+        tag:
+          type: string
+          maxLength: 60
     ExternalAccessRequest:
       type: object
       additionalProperties: false
@@ -1340,22 +1641,122 @@ components:
         floating_ip_id:
           type: string
           format: uuid
+    ImageBootSourceRequest:
+      type: object
+      additionalProperties: false
+      required: [type, image_id]
+      properties:
+        type:
+          type: string
+          const: image
+        image_id:
+          type: string
+          format: uuid
+        create_boot_volume:
+          type: boolean
+          default: false
+        volume_size_gib:
+          type: integer
+          minimum: 1
+        volume_type:
+          type: string
+        delete_on_termination:
+          type: boolean
+          default: true
+    VolumeBootSourceRequest:
+      type: object
+      additionalProperties: false
+      required: [type, volume_id]
+      properties:
+        type:
+          type: string
+          const: volume
+        volume_id:
+          type: string
+          format: uuid
+        delete_on_termination:
+          type: boolean
+          default: false
+    VolumeSnapshotBootSourceRequest:
+      type: object
+      additionalProperties: false
+      required: [type, snapshot_id]
+      properties:
+        type:
+          type: string
+          const: volume_snapshot
+        snapshot_id:
+          type: string
+          format: uuid
+        volume_size_gib:
+          type: integer
+          minimum: 1
+        volume_type:
+          type: string
+        delete_on_termination:
+          type: boolean
+          default: true
+    InstanceBootSourceRequest:
+      oneOf:
+        - $ref: "#/components/schemas/ImageBootSourceRequest"
+        - $ref: "#/components/schemas/VolumeBootSourceRequest"
+        - $ref: "#/components/schemas/VolumeSnapshotBootSourceRequest"
+      discriminator:
+        propertyName: type
+        mapping:
+          image: "#/components/schemas/ImageBootSourceRequest"
+          volume: "#/components/schemas/VolumeBootSourceRequest"
+          volume_snapshot: "#/components/schemas/VolumeSnapshotBootSourceRequest"
+    BlockDeviceRequest:
+      type: object
+      additionalProperties: false
+      required: [source_type, destination_type, boot_index]
+      properties:
+        source_type:
+          type: string
+          enum: [blank, image, volume, snapshot]
+        source_id:
+          type: string
+          format: uuid
+        destination_type:
+          type: string
+          enum: [local, volume]
+        boot_index:
+          type: integer
+          minimum: -1
+        device_name:
+          type: string
+        volume_size_gib:
+          type: integer
+          minimum: 1
+        volume_type:
+          type: string
+        delete_on_termination:
+          type: boolean
+          default: false
+        tag:
+          type: string
     CreateInstanceRequest:
       type: object
       additionalProperties: false
-      required: [name, image_id, flavor_id, networks]
+      required: [name, boot_source, flavor_id, networks]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 255
+        description:
+          type: string
+          maxLength: 255
+        hostname:
+          type: string
+          maxLength: 255
         count:
           type: integer
           minimum: 1
           default: 1
-        image_id:
-          type: string
-          format: uuid
+        boot_source:
+          $ref: "#/components/schemas/InstanceBootSourceRequest"
         flavor_id:
           type: string
         availability_zone:
@@ -1378,15 +1779,82 @@ components:
             - type: "null"
         external_access:
           $ref: "#/components/schemas/ExternalAccessRequest"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+          uniqueItems: true
+        user_data:
+          type: string
+          writeOnly: true
+          maxLength: 65535
+        config_drive:
+          type: boolean
+          default: false
+        server_group_id:
+          type: string
+          format: uuid
+        scheduler_hints:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+              - type: array
+                items:
+                  type: string
+        block_devices:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockDeviceRequest"
+        disk_config:
+          type: string
+          enum: [AUTO, MANUAL]
+        admin_password:
+          type: string
+          writeOnly: true
+          minLength: 1
+        trusted_image_certificate_ids:
+          type: array
+          items:
+            type: string
+          uniqueItems: true
     UpdateInstanceRequest:
       type: object
       additionalProperties: false
-      required: [name]
+      minProperties: 1
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 255
+        description:
+          anyOf:
+            - type: string
+              maxLength: 255
+            - type: "null"
+        hostname:
+          type: string
+          maxLength: 255
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        unset_metadata:
+          type: array
+          items:
+            type: string
+          uniqueItems: true
+        tags:
+          type: array
+          items:
+            type: string
+          uniqueItems: true
     InstanceActionRequest:
       type: object
       additionalProperties: false

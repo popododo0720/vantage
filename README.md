@@ -37,7 +37,9 @@ Goal 1 is the active delivery target.
 - Keystone tokens stay in the server-side session.
 - The browser receives only an `HttpOnly; Secure; SameSite` session cookie.
 - User actions are never proxied through a shared administrator account.
-- Lists use server-side filtering and pagination.
+- Lists use server-side filtering and one numbered pagination pattern:
+  `Rows 10/25/50/100`, a result range, and `‹ 1 2 3 … ›`. Text
+  `Previous`/`Next` controls are not used.
 - OpenStack policy enforcement and `403 Forbidden` are authoritative.
 - `openstacksdk` handles microversion selection and normalized responses.
 - Service endpoints come from the Keystone service catalog.
@@ -48,6 +50,9 @@ Goal 1 is the active delivery target.
   discovery, not deployment-specific branches.
 - Absent, unsupported, degraded, and policy-limited capabilities gate
   navigation and operations explicitly.
+- OpenStack API/CLI-supported create, set, unset, action, and delete operations
+  cannot be silently omitted. Immutable or unavailable options remain
+  discoverable with an explicit reason.
 
 ## Documents
 
@@ -59,6 +64,8 @@ Goal 1 is the active delivery target.
 - [Design contract](docs/DESIGN.md)
 - [Goal 1 screen and interaction specification](docs/GOAL1-FLOWS.md)
 - [MVP mutation interaction specification](docs/MVP-INTERACTIONS.md)
+- [Resource screen and interaction contract](docs/RESOURCE-INTERACTIONS.md)
+- [CLI and API parity contract](docs/CLI-PARITY.md)
 - [Goal 1 BFF OpenAPI](api/openapi.yaml)
 
 ## Working Surfaces

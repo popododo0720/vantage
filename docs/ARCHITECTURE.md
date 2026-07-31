@@ -38,8 +38,8 @@ token. Credentials exist only for the Keystone authentication exchange.
 
 - Route shell for Auth, Overview, Compute, Network, Storage, and
   Administration.
-- Query state contains filters, page size, cursor, selected row, and safe
-  current-scope view data.
+- Query state contains filters, page size, visible page number, selected row,
+  and safe current-scope view data. Upstream cursors remain opaque BFF state.
 - Mutations receive an operation ID and observe operation state rather than
   holding a browser request open.
 - English and Korean are Goal 1 locales. Resource names, IDs, status values,
@@ -59,6 +59,21 @@ token. Credentials exist only for the Keystone authentication exchange.
   terminology and request IDs.
 - Treats OpenStack policy and `403` as authoritative. It never retries with a
   shared administrator credential.
+
+### Resource Contract Registry
+
+- Stores one descriptor per create/edit field, relationship, action, and
+  delete command.
+- Each descriptor records service/API field, SDK argument, CLI equivalent,
+  data type, validation, default, mutability, sensitivity, extension or
+  microversion, policy/state hints, and support state.
+- Produces the browser-facing resource-capability response used by forms,
+  action menus, tooltips, and Korean/English labels.
+- Keeps unsupported fields out of submitted payloads while preserving a
+  visible reason for immutable, capability-gated, policy-gated, state-gated,
+  upstream-absent, and deferred items.
+- Is reconciled against the OpenStack 2026.1 command/API ledger for every
+  resource before its roadmap goal exits.
 
 ### Session and Scope Store
 
@@ -99,12 +114,21 @@ token. Credentials exist only for the Keystone authentication exchange.
 1. Resolve the opaque Vantage session.
 2. Validate active project, region, and route capability.
 3. Build a cache key from user, project, region, service, capability behavior,
-   filters, page size, and cursor.
+   filters, page size, and the resolved upstream cursor.
 4. Return a fresh bounded value or start a bounded upstream request.
 5. For overview only, fan out Nova, Neutron, and Cinder reads behind one BFF
    deadline and return successful widgets independently.
-6. Preserve `next_cursor`, `has_more`, stale timestamp, trace ID, and upstream
-   request ID where applicable.
+6. Return visible page number, page size, result range, navigable pages,
+   optional reliable totals, stale timestamp, trace ID, and upstream request ID
+   where applicable. Upstream cursors never leave the BFF.
+
+For numbered browser pagination, the BFF keeps a short-lived cursor chain keyed
+by session, scope, resource, filters, sort, and page size. It resolves visible
+controls such as `‹ 1 2 3 ... ›` to upstream markers without exposing service
+tokens or downloading a complete collection. Reliable totals are returned only
+when the service can provide or safely cache them; otherwise the page window
+contains reached and adjacent navigable pages. Any query-shape change discards
+the chain and returns to page 1.
 
 ## Mutation Path
 
@@ -116,6 +140,11 @@ token. Credentials exist only for the Keystone authentication exchange.
 5. Observe final or recoverable intermediate state.
 6. Invalidate only affected current-scope cache entries.
 7. Surface OpenStack `403`, `404`, `409`, `429`, and `5xx` distinctly.
+
+Delete uses the same path plus a bounded dependency preview. The preview is
+informational and never substitutes for the service's final policy/state
+decision. Force deletion is a distinct descriptor and idempotency scope, not a
+flag silently added to an ordinary delete.
 
 ## Caching and Performance
 

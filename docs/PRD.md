@@ -38,6 +38,28 @@ architecture or performance constraints.
 - OpenStack terminology, resources, policies, and request IDs remain visible.
 - The implementation stays compatible with cloud upgrades through service
   catalog discovery and `openstacksdk` normalization.
+- A web user can find the create, edit, set/unset, action, and delete operations
+  supported by the active OpenStack API without falling back to the CLI merely
+  because the console omitted an option.
+
+## API and CLI Coverage
+
+Vantage uses the OpenStack 2026.1 APIs, `openstacksdk`, and
+`python-openstackclient` object commands as its coverage baseline. The
+[CLI and API parity contract](CLI-PARITY.md) records mutable, immutable,
+capability-gated, policy-gated, state-gated, unavailable, and deferred
+operations.
+
+- No supported field or command is silently omitted.
+- Create and edit surfaces share field descriptors so `set`/`unset` options do
+  not disappear after resource creation.
+- Every deletable resource exposes Delete in its row menu and detail danger
+  zone, with dependency-aware confirmation.
+- Immutable values remain visible and use a clone/recreate flow where
+  appropriate, such as Flavor sizing.
+- Delivery remains incremental: each goal completes parity for the resources
+  introduced by that goal. Later-goal resources stay in the ledger and Penpot,
+  but do not block use of Goal 1.
 
 ## Non-Goals
 
@@ -76,7 +98,10 @@ Included:
 - Background revalidation and widget-level partial failure
 - Browse project/public images, allowed Flavors, networks, security groups, and
   keypairs through server-side collections
-- Three-step instance creation: Basics, Network & access, Review
+- Four-step instance creation: Basics, Network & access, Advanced, Review
+- Capability-gated advanced provisioning for boot source, metadata, tags, user
+  data, config drive, server group/scheduler hints, and supported
+  microversion-specific fields
 - Edit the Nova display name
 - Create and delete a VM
 - Start, stop, soft reboot, hard reboot, pause, unpause, suspend, resume,
@@ -117,6 +142,8 @@ Release gate:
 - Required inputs are explicit and do not depend on deployment-specific
   defaults.
 - Input collections use server-side filtering and pagination.
+- Instance create, edit, action, and delete coverage passes the parity ledger
+  with no unexplained gaps.
 
 ### Goal 2: Full Project Networking
 
@@ -137,6 +164,8 @@ Release gate:
 - Extension-dependent fields and commands are capability gated.
 - Policy `403`, revision conflicts, and asynchronous provisioning states are
   distinct from empty or unsupported states.
+- Every supported Neutron create, set/unset, relationship, action, and delete
+  operation has an Available or explicitly gated ledger state.
 
 ### Goal 3: Project Storage Depth
 
@@ -153,6 +182,9 @@ Release gate:
 - The BFF API is backend-neutral.
 - The initial Cinder backend works without Ceph.
 - Adding an RBD backend later does not require a user-flow or endpoint change.
+- Cinder create, set/unset, action, force-action, and delete coverage is
+  reconciled against the parity ledger; storage backends do not receive fake
+  mutation controls.
 
 ### Goal 4: Administrator Workspace
 
@@ -174,6 +206,11 @@ domain, or project token scope is always explicit:
 
 Administrator actions still use the administrator's own scoped token. They are
 not a shared proxy for project users.
+
+Goal 4 exits only after Identity, cross-project Compute, Neutron
+administration, Flavor, image, quota, volume type, backend, and QoS-spec
+operations have explicit parity-ledger states. Administrator-only controls
+never appear merely because the browser inferred a role name.
 
 ## Capability-Driven Expansion
 

@@ -22,6 +22,73 @@ contract and are represented in the Goal 1 OpenAPI.
 - Duplicate submission is disabled and protected with an idempotency boundary
   appropriate to the operation.
 
+## Common List Pagination
+
+- Every resource list, including admin lists, uses the same visible contract:
+  `Rows 10/25/50/100`, a result range, and numbered pagination
+  `‹ 1 2 3 ... ›`.
+- `Previous`, `Prev`, and `Next` text buttons are prohibited. Only the
+  directional chevrons flank the page numbers.
+- Search, filters, sort, project, and page-size changes reset the visible page
+  to 1 and invalidate the BFF cursor map for the prior query.
+- The browser sends bounded list requests. The BFF maps visible page numbers to
+  Nova, Neutron, Cinder, or Keystone cursor/marker semantics; it never fetches
+  an entire collection to paginate in memory.
+- The result range and available page buttons reflect server-confirmed data.
+  Loading, empty, partial-error, and permission states keep the footer geometry
+  stable.
+
+## Common Resource Mutation Pattern
+
+- Every Goal 1 resource row ends with one action menu ordered as `View
+  details`, `Edit settings`, relationship/lifecycle commands, then `Delete`.
+- The detail surface keeps common mutable fields in `Settings`, less frequent
+  or microversion-gated fields in searchable `Advanced`, and sharing or
+  assignment controls in `Access` when applicable.
+- Create and edit use the same field descriptors. Each descriptor identifies
+  the exact OpenStack field, SDK argument, mutability, validation,
+  microversion/extension, and policy or state gate.
+- A supported set/unset, attach/detach, associate/disassociate, action, or
+  delete command cannot be silently absent. A disabled command states why it
+  is unavailable.
+- Immutable fields remain visible. A resource that must be recreated offers a
+  prefilled clone flow instead of pretending an update is supported.
+- Every deletable resource has Delete in both the row menu and detail danger
+  zone. Storage backends are not deletable resources and never show a fake
+  command.
+
+### Shared Delete Confirmation
+
+1. Identify the exact type, name, ID, project, and current state.
+2. Load known dependencies without downloading unbounded collections.
+3. Explain detach, disassociate, release, retain, and
+   delete-on-termination outcomes separately.
+4. Require typed name or ID confirmation for an instance with dependencies or
+   any administrator-scoped destructive operation.
+5. Submit one idempotent command. Force delete, when supported, is a separate
+   capability- and policy-gated choice.
+6. Keep the row until OpenStack accepts the command. A failed command preserves
+   current data and shows the upstream request ID.
+
+## Create Instance
+
+The wizard has four stable steps:
+
+1. `Basics`: name/count, image or supported boot-volume source, Flavor,
+   availability zone, and projected quota use.
+2. `Network & access`: network or compatible port, fixed IP when requested,
+   security groups, key pair, and Floating-IP posture.
+3. `Advanced`: description/hostname, metadata, tags, user data, config drive,
+   server group/scheduler hints, boot-volume behavior, and other advertised
+   microversion fields.
+4. `Review`: every effective value, omitted/defaulted values, quota preflight,
+   dependency summary, and the final `Launch instance` command.
+
+Advanced fields are searchable and grouped by source, placement, guest
+customization, metadata, and storage. Unsupported fields are not submitted.
+Sensitive values such as user data or an optional generated password are
+write-only, excluded from logs, and shown in review only as present or absent.
+
 ## Instance Detail Drawer
 
 - Selecting an instance opens a right drawer over the preserved list.
@@ -92,6 +159,11 @@ Every command returns a tracked operation. Conflicting commands remain disabled
 until final state or a recoverable error is observed. UI visibility never
 overrides Nova policy or a `403`.
 
+Delete appears as the final destructive menu item and in the detail danger
+zone. Its confirmation distinguishes boot volumes with
+`delete_on_termination`, other attached volumes, attached ports, and allocated
+versus associated Floating IPs.
+
 ## Resize Instance
 
 ```mermaid
@@ -157,7 +229,9 @@ stateDiagram-v2
 - `Vantage - Instance Delete Confirm`
 - `Vantage - Create Instance 1 Basics`
 - `Vantage - Create Instance 2 Network`
-- `Vantage - Create Instance 3 Review`
+- `Vantage - Create Instance 3 Advanced`
+- `Vantage - Create Instance 4 Review`
+- `Vantage - Resource Delete Pattern`
 - `Vantage - Images`
 - `Vantage - Key Pairs`
 - `Vantage - noVNC Console`

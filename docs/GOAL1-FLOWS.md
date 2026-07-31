@@ -25,7 +25,7 @@ flowchart LR
     Overview --> Quotas["Quota details"]
     Overview --> Instances["Instance list"]
     Instances --> Detail["Instance detail drawer"]
-    Instances --> Create["Create Instance: Basics -> Network -> Review"]
+    Instances --> Create["Create Instance: Basics -> Network -> Advanced -> Review"]
     Create --> Operation["Tracked asynchronous operation"]
     Detail --> Actions["Lifecycle / resize / delete"]
     Detail --> Network["NIC / Floating IP"]
@@ -128,8 +128,10 @@ selection.
 - Search, status, image, sort, and pagination are BFF parameters and are passed
   to supported upstream server-side filters.
 - The page-size control offers exactly 10, 25, 50, and 100 rows. The default is
-  25. Filter or page-size changes reset the cursor. Browser back/forward
-  restores filters, cursor, page size, selection, and scroll position.
+  25. The footer shows a result range and `‹ 1 2 3 … ›`; text
+  `Previous`/`Next` controls are not used. Filter or page-size changes return
+  to page 1 and invalidate the BFF cursor chain. Browser back/forward restores
+  filters, visible page, page size, selection, and scroll position.
 - Rows keep a stable 48 px minimum target. Selecting a name or row opens the
   detail route without unloading the list.
 - Empty means a successful page with zero items. Permission denied and service
@@ -163,7 +165,11 @@ selection.
   projected instances/vCPU/RAM quota use.
 - Step 2 selects Neutron network or compatible port, security groups, keypair,
   and optional Floating-IP posture. It never exposes OVN implementation data.
-- Step 3 reviews every effective input and runs a non-authoritative preflight.
+- Step 3 exposes searchable Advanced groups for boot source/volume behavior,
+  description/hostname, metadata/tags, user data, config drive, server group,
+  scheduler hints, and advertised microversion fields. Unsupported fields are
+  neither enabled nor submitted.
+- Step 4 reviews every effective input and runs a non-authoritative preflight.
   The final OpenStack APIs and policy response remain authoritative.
 - `Launch instance` returns an operation immediately; duplicate submission is
   protected by an idempotency key.
@@ -175,8 +181,10 @@ selection.
   suspend/resume, shelve/unshelve, resize, and delete.
 - Resize displays current and requested Flavor. `VERIFY_RESIZE` requires an
   explicit Confirm or Revert unless the deployment auto-confirms.
-- Delete requires the instance name and explicitly states whether attached
-  volumes and the Floating-IP allocation are preserved.
+- Delete is the final row-menu action and an explicit detail danger-zone
+  command. It requires the instance name and separately states the outcome for
+  boot volumes, other attached volumes, ports, associated Floating IPs, and the
+  Floating-IP allocation.
 
 ### Network, Storage, and Console
 

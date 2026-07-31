@@ -49,10 +49,10 @@ overlay states form one usable operating path:
 | Project switcher | Project name in the global header | Attached popover; selecting a project clears old scope and shows a switching state |
 | Project overview | Successful project entry | Quota pressure, workload summary, network summary, and partial failures |
 | Quota details | `View all quotas` or `View quota details` | Compute, network, and storage quota rows with used, reserved, and limit values |
-| Instance list | `Instances`, `View all`, or workload count | Server-filtered search, status filter, sort, 10/25/50/100 page sizing, cursor pagination, and row selection |
+| Instance list | `Instances`, `View all`, or workload count | Server-filtered search, status filter, sort, 10/25/50/100 page sizing, numbered pagination backed by BFF cursor mapping, and row selection |
 | Instance detail | Instance row or name | Right-side drawer with overview, addresses, image/flavor, volumes, and request IDs |
 | Images and Key Pairs | Compute navigation or create flow | Paginated Glance inventory and project keypair inventory with one-time private-key handling |
-| Create Instance | `Create instance` | Basics, Network & access, and Review steps with quota preflight and asynchronous launch |
+| Create Instance | `Create instance` | Basics, Network & access, Advanced, and Review steps with quota preflight and asynchronous launch |
 | Instance commands | `Edit name` or `Actions` | Name edit, state-aware lifecycle actions, resize/confirm/revert, and destructive delete confirmation |
 | Instance network | Network tab in detail | NIC attachment, supported port editing, security groups, and Floating IP association |
 | Volume attachment | Storage tab in detail | Attach/detach a project volume with intermediate and failed states |
@@ -71,11 +71,34 @@ disabled control with no useful result is not shown.
   previous project cache, and replaces project data with a switching skeleton.
   The list never fans out quota calls across every accessible project; it uses
   project metadata and locally stored last-opened time.
+- **Collection pagination:** every project and admin resource list uses one
+  footer pattern: a `Rows` selector with exactly 10, 25, 50, and 100 (25 by
+  default), a result range such as `1-25 of 248`, and numbered controls such as
+  `‹ 1 2 3 ... ›`. The active page has a distinct selected state and the edge
+  chevron is disabled when no page exists in that direction. Text buttons named
+  `Previous`, `Prev`, or `Next` are not permitted. Filter, sort, project, or page
+  size changes return to page 1.
 - **Instance inventory:** rows have a stable 48 px interaction target. Search,
-  status, and sort are server-side. Pagination uses the service marker/cursor;
-  the page-size choices are exactly 10, 25, 50, and 100, with 25 as the
-  default. Changing page size resets the cursor. Large collections may
-  virtualize visible rows without changing the API contract.
+  status, and sort are server-side. The BFF translates the visible page number
+  to the upstream service marker/cursor and retains the token chain for the
+  active query. The browser never downloads a complete collection to calculate
+  page numbers. Large collections may virtualize visible rows without changing
+  the API contract.
+- **Collection row actions:** every resource row ends with the same icon menu.
+  It contains `View details`, `Edit settings`, relationship or lifecycle
+  commands, and `Delete` when the upstream API supports them. A gated command
+  remains discoverable with its policy, capability, dependency, or state
+  reason. Storage backends are read-only discovery data and do not receive a
+  fake Delete command.
+- **Resource detail:** use `Overview`, `Settings`, `Advanced`, `Access`,
+  resource-specific relationships, and `Events` only where each section is
+  meaningful. Create and edit reuse the same field descriptors. Mutable values
+  support set/unset; immutable values remain read-only and offer clone/recreate
+  when applicable.
+- **Danger zone:** every deletable detail view ends with an explicit Delete
+  command. Confirmation names the resource, previews known dependants and
+  retention outcomes, and requires typed name/ID confirmation for high-impact
+  or administrator resources. Force delete is separate and capability gated.
 - **Instance detail:** open a right drawer that preserves list filters and scroll
   position. The drawer closes via its close icon, backdrop, or `Escape`; focus
   returns to the originating row. List-only controls such as `Rows 25` never
@@ -106,6 +129,10 @@ administrator surfaces:
 - **Instance network (Goal 1):** manage Nova interface attachments,
   Neutron-backed fixed IPs and security groups, and Floating IP association
   without exposing OVN implementation objects.
+- **Advanced instance create (Goal 1):** keep common provisioning concise while
+  exposing capability-gated boot source, metadata, tags, user data, config
+  drive, server group/scheduler hints, and microversion-specific fields in a
+  searchable Advanced step.
 - **Network and storage areas (Goals 2-3):** keep Neutron and Cinder resources
   as separate product pages. Goal 1 exposes only the subset needed for daily VM
   connectivity and attachment.
@@ -115,6 +142,9 @@ administrator surfaces:
 
 The detailed pending, success, conflict, policy, and rollback behavior is in
 [MVP mutation interaction specification](MVP-INTERACTIONS.md).
+The per-resource list, detail, Settings, Advanced, Access, relationship, and
+Delete behavior is in
+[Resource screen and interaction contract](RESOURCE-INTERACTIONS.md).
 
 ## Administrator Navigation
 
@@ -154,6 +184,8 @@ Every primary view accounts for:
 - stale cached data with timestamp
 - asynchronous action in progress
 - action failure with an OpenStack request ID
+- immutable, capability-gated, policy-gated, state-gated, and
+  dependency-blocked controls with a visible reason
 
 ## Visual Rules
 
@@ -164,6 +196,9 @@ Every primary view accounts for:
 - No cards nested inside cards.
 - No manual refresh control; show background-update state only when useful.
 - Icons for familiar actions, with tooltips for unfamiliar controls.
+- Row menus and detail actions use the same labels and ordering across Compute,
+  Network, Storage, and Administration. Delete is never hidden in an unrelated
+  settings form.
 - Text and actions must fit at desktop and mobile breakpoints without overlap.
 - English and Korean are the Goal 1 locales. Localized labels may wrap, but
   resource names, IDs, API statuses, and request IDs remain exact.
@@ -180,9 +215,9 @@ historical exploration. Production screen boards are organized as follows:
 | --- | --- |
 | `01 - Auth` | 3: Login, Login Error, Project Selection |
 | `02 - Dashboard` | 4: Project Overview, Project Switcher, Quota Details, Dashboard States |
-| `03 - Compute` | 17: Instances, noVNC, Create Instance steps 1-3, Images, Key Pairs, Instances Page Size, Instance Detail, Delete Confirm, Actions EN/KO, Resize Verify, Resize, Edit Name, Instance Network, NIC Edit |
-| `04 - Network` | 10: Networks, Network Detail, RBAC Policies, Load Balancers, QoS Policies, Security Groups, Routers, Ports, Subnets, Floating IPs |
-| `05 - Storage` | 4: Volumes, Volume Backups, Volume Snapshots, Volume Detail |
+| `03 - Compute` | 20: Instances, Instance Row Actions, noVNC, Create Instance steps 1-4, Images, Key Pairs, Instances Page Size, Instance Detail, Instance Delete Confirm, Resource Delete Pattern, Actions EN/KO, Resize Verify, Resize, Edit Name, Instance Network, NIC Edit |
+| `04 - Network` | 14: Networks, Network Detail, Network Row Actions, Network Settings, Network Delete Confirm, Port Settings, RBAC Policies, Load Balancers, QoS Policies, Security Groups, Routers, Ports, Subnets, Floating IPs |
+| `05 - Storage` | 9: Volumes, Volume Detail, Volume Row Actions, Volume Settings, Volume Delete Confirm, Volume Snapshots, Snapshot Row Actions, Volume Backups, Backup Row Actions |
 | `06 - Administration` | 11: Admin Overview, QoS Specs, Storage Backends, Volume Types, Projects, Users, Groups, Role Assignments, Project Quotas, Network RBAC, All Instances |
 
 `Dashboard` is only the Penpot page grouping. The product label and route remain
