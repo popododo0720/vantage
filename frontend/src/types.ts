@@ -71,6 +71,50 @@ export interface InstancePage {
   page: PageInfo
 }
 
+export interface InventoryQuery {
+  limit: 10 | 25 | 50 | 100
+  page: number
+}
+
+export type ImageVisibility = '' | 'private' | 'shared' | 'community' | 'public'
+
+export interface ImageQuery extends InventoryQuery {
+  name: string
+  visibility: ImageVisibility
+}
+
+export interface Image {
+  id: string
+  name: string | null
+  status: string
+  visibility: string
+  disk_format?: string | null
+  container_format?: string | null
+  size_bytes?: number | null
+  min_disk_gib?: number | null
+  min_ram_mib?: number | null
+  created_at?: string | null
+}
+
+export interface ImagePage {
+  items: Image[]
+  page: PageInfo
+}
+
+export interface KeyPair {
+  name: string
+  type: 'ssh' | 'x509' | null
+  fingerprint: string | null
+  public_key_preview?: string | null
+  created_at?: string | null
+  last_used_at?: string | null
+}
+
+export interface KeyPairPage {
+  items: KeyPair[]
+  page: PageInfo
+}
+
 export interface InstanceVolume {
   id: string
   device?: string | null

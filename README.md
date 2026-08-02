@@ -76,14 +76,17 @@ SDK requests use a 15-second default boundary. Set
 `VANTAGE_OS_TIMEOUT_SECONDS` only when the reference cloud requires a different
 measured value. Quota widgets have a shorter independent boundary controlled by
 `VANTAGE_QUOTA_SOURCE_TIMEOUT_SECONDS`, defaulting to 3 seconds. Nova instance
-list/detail calls use `VANTAGE_INSTANCE_SOURCE_TIMEOUT_SECONDS`, also defaulting
-to 3 seconds. Blocking OpenStack SDK work is limited by
+list/detail calls use `VANTAGE_INSTANCE_SOURCE_TIMEOUT_SECONDS`; image, flavor,
+key-pair, network, and security-group inventory calls use
+`VANTAGE_PROVISIONING_SOURCE_TIMEOUT_SECONDS`. Both default to 3 seconds.
+Blocking OpenStack SDK work is limited by
 `VANTAGE_OPENSTACK_SDK_THREAD_CAPACITY` (default `8`); timed-out work retains
 its slot until the underlying thread exits.
 
 No credential, password, Keystone token, or service endpoint is committed.
 See [ADR 0001](docs/adr/0001-goal1-runtime-foundation.md) for the runtime and
-session-store boundaries.
+session-store boundaries and [ADR 0002](docs/adr/0002-idempotent-operation-boundary.md)
+for the shared mutation and operation-tracking contract.
 
 The public session response does not contain the complete accessible-project
 set. Project selection uses the paginated `/api/v1/projects` route; only the

@@ -21,10 +21,13 @@ class Settings:
     request_timeout_seconds: int = 15
     quota_source_timeout_seconds: float = 3.0
     instance_source_timeout_seconds: float = 3.0
+    provisioning_source_timeout_seconds: float = 3.0
     openstack_sdk_thread_capacity: int = 8
     instance_cursor_ttl_seconds: int = 300
     instance_cursor_max_chains: int = 256
     instance_cursor_max_pages: int = 1000
+    operation_terminal_ttl_seconds: int = 86400
+    operation_max_records: int = 4096
     login_attempt_limit: int = 5
     login_attempt_window_seconds: int = 60
 
@@ -34,10 +37,13 @@ class Settings:
             "request_timeout_seconds": self.request_timeout_seconds,
             "quota_source_timeout_seconds": self.quota_source_timeout_seconds,
             "instance_source_timeout_seconds": self.instance_source_timeout_seconds,
+            "provisioning_source_timeout_seconds": self.provisioning_source_timeout_seconds,
             "openstack_sdk_thread_capacity": self.openstack_sdk_thread_capacity,
             "instance_cursor_ttl_seconds": self.instance_cursor_ttl_seconds,
             "instance_cursor_max_chains": self.instance_cursor_max_chains,
             "instance_cursor_max_pages": self.instance_cursor_max_pages,
+            "operation_terminal_ttl_seconds": self.operation_terminal_ttl_seconds,
+            "operation_max_records": self.operation_max_records,
             "login_attempt_limit": self.login_attempt_limit,
             "login_attempt_window_seconds": self.login_attempt_window_seconds,
         }
@@ -61,6 +67,9 @@ class Settings:
             instance_source_timeout_seconds=float(
                 os.getenv("VANTAGE_INSTANCE_SOURCE_TIMEOUT_SECONDS", "3")
             ),
+            provisioning_source_timeout_seconds=float(
+                os.getenv("VANTAGE_PROVISIONING_SOURCE_TIMEOUT_SECONDS", "3")
+            ),
             openstack_sdk_thread_capacity=int(
                 os.getenv("VANTAGE_OPENSTACK_SDK_THREAD_CAPACITY", "8")
             ),
@@ -72,6 +81,12 @@ class Settings:
             ),
             instance_cursor_max_pages=int(
                 os.getenv("VANTAGE_INSTANCE_CURSOR_MAX_PAGES", "1000")
+            ),
+            operation_terminal_ttl_seconds=int(
+                os.getenv("VANTAGE_OPERATION_TERMINAL_TTL_SECONDS", "86400")
+            ),
+            operation_max_records=int(
+                os.getenv("VANTAGE_OPERATION_MAX_RECORDS", "4096")
             ),
             login_attempt_limit=int(os.getenv("VANTAGE_LOGIN_ATTEMPT_LIMIT", "5")),
             login_attempt_window_seconds=int(

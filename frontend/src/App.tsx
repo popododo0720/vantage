@@ -3,9 +3,20 @@ import type { FormEvent, ReactNode } from 'react'
 import { ApiError, api } from './api'
 import { DEFAULT_INSTANCE_QUERY, instancePath, parseInstanceRoute } from './instance-route'
 import { InstancesPage } from './InstancesPage'
+import {
+  DEFAULT_IMAGE_QUERY,
+  DEFAULT_KEYPAIR_QUERY,
+  imagePath,
+  keyPairPath,
+  parseImageRoute,
+  parseKeyPairRoute,
+} from './inventory-route'
 import { Pagination } from './Pagination'
+import { ImagesPage, KeyPairsPage } from './ProvisioningPages'
 import type {
+  ImageQuery,
   InstanceQuery,
+  InventoryQuery,
   ProjectOverview,
   ProjectPage,
   Quota,
@@ -34,6 +45,8 @@ type State =
     drawerFromList: boolean
     error?: ErrorInfo
   }
+  | { kind: 'images'; session: Session; query: ImageQuery; error?: ErrorInfo }
+  | { kind: 'keypairs'; session: Session; query: InventoryQuery; error?: ErrorInfo }
 type HistoryMode = 'push' | 'replace' | 'none'
 
 const labels = {
@@ -113,6 +126,9 @@ const labels = {
     high: 'High',
     unknown: 'Unknown',
     instances: 'Instances',
+    images: 'Images',
+    access: 'Access',
+    keypairs: 'Key pairs',
     cores: 'vCPUs',
     ram_mib: 'Memory',
     volumes: 'Volumes',
@@ -206,6 +222,9 @@ const labels = {
     high: '높음',
     unknown: '알 수 없음',
     instances: '인스턴스',
+    images: '이미지',
+    access: '접근',
+    keypairs: '키 페어',
     cores: 'vCPU',
     ram_mib: '메모리',
     volumes: '볼륨',
@@ -236,6 +255,10 @@ function scopedState(session: Session, route = '/overview', drawerFromList = fal
   if (url.pathname === '/quotas') {
     return { kind: 'quotas', session, filter: quotaFilter(url.searchParams.get('service')) }
   }
+  const imageQuery = parseImageRoute(url.href)
+  if (imageQuery) return { kind: 'images', session, query: imageQuery }
+  const keypairQuery = parseKeyPairRoute(url.href)
+  if (keypairQuery) return { kind: 'keypairs', session, query: keypairQuery }
   const instanceRoute = parseInstanceRoute(url.href)
   if (instanceRoute) {
     return {
@@ -258,6 +281,8 @@ function pathForState(state: State): string {
     return state.filter === 'all' ? '/quotas' : `/quotas?service=${state.filter}`
   }
   if (state.kind === 'instances') return instancePath(state.query, state.selectedId)
+  if (state.kind === 'images') return imagePath(state.query)
+  if (state.kind === 'keypairs') return keyPairPath(state.query)
   return window.location.pathname
 }
 
@@ -267,6 +292,10 @@ function safeReturnUrl(value: unknown): string | undefined {
   if (url.origin !== window.location.origin) return undefined
   const instanceRoute = parseInstanceRoute(url.href)
   if (instanceRoute) return instancePath(instanceRoute.query, instanceRoute.instanceId)
+  const imageQuery = parseImageRoute(url.href)
+  if (imageQuery) return imagePath(imageQuery)
+  const keypairQuery = parseKeyPairRoute(url.href)
+  if (keypairQuery) return keyPairPath(keypairQuery)
   if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
   if (url.pathname === '/quotas' && url.searchParams.has('service')) {
     const service = url.searchParams.get('service')
@@ -291,6 +320,8 @@ function sessionForState(state: State): Session | undefined {
     || state.kind === 'overview'
     || state.kind === 'quotas'
     || state.kind === 'instances'
+    || state.kind === 'images'
+    || state.kind === 'keypairs'
     ? state.session
     : undefined
 }
@@ -386,6 +417,8 @@ export function App() {
         next = scopedState(session, currentUrl())
       } else if (parseInstanceRoute(window.location.href) && session?.active_scope) {
         next = scopedState(session, currentUrl(), Boolean(window.history.state?.instanceDrawer))
+      } else if ((parseImageRoute(window.location.href) || parseKeyPairRoute(window.location.href)) && session?.active_scope) {
+        next = scopedState(session, currentUrl())
       }
       if (next) transition(next, 'none')
       else window.history.replaceState({}, '', pathForState(current))
@@ -413,6 +446,8 @@ export function App() {
       && state.kind !== 'overview'
       && state.kind !== 'quotas'
       && state.kind !== 'instances'
+      && state.kind !== 'images'
+      && state.kind !== 'keypairs'
     ) return
     try {
       const session = await api.locale(next)
@@ -488,6 +523,8 @@ export function App() {
       filter={state.kind === 'quotas' ? state.filter : 'all'}
       instanceQuery={state.kind === 'instances' ? state.query : DEFAULT_INSTANCE_QUERY}
       selectedInstanceId={state.kind === 'instances' ? state.selectedId : undefined}
+      imageQuery={state.kind === 'images' ? state.query : DEFAULT_IMAGE_QUERY}
+      keypairQuery={state.kind === 'keypairs' ? state.query : DEFAULT_KEYPAIR_QUERY}
       onNavigate={(view, filter = 'all') => {
         if (view === 'quotas') transition({ kind: 'quotas', session: state.session, filter })
         else if (view === 'instances') {
@@ -497,6 +534,10 @@ export function App() {
             query: DEFAULT_INSTANCE_QUERY,
             drawerFromList: false,
           })
+        } else if (view === 'images') {
+          transition({ kind: 'images', session: state.session, query: DEFAULT_IMAGE_QUERY })
+        } else if (view === 'keypairs') {
+          transition({ kind: 'keypairs', session: state.session, query: DEFAULT_KEYPAIR_QUERY })
         } else transition({ kind: 'overview', session: state.session })
       }}
       onInstanceQuery={(query, mode) => {
@@ -519,10 +560,16 @@ export function App() {
         }
         transition({ ...state, selectedId: undefined, drawerFromList: false }, 'replace')
       }}
+      onImageQuery={(query, mode) => {
+        if (state.kind === 'images') transition({ ...state, query }, mode)
+      }}
+      onKeyPairQuery={(query, mode) => {
+        if (state.kind === 'keypairs') transition({ ...state, query }, mode)
+      }}
       onSwitch={() => {
         pendingSafeRoute.current = state.kind === 'instances'
           ? instancePath(state.query)
-          : (safeReturnUrl(window.location.href) ?? '/overview')
+          : safeReturnUrl(window.location.href) ?? '/overview'
         transition({ kind: 'projects', session: state.session })
       }}
       onExpired={expire}
@@ -944,10 +991,14 @@ function ProjectWorkspace({
   filter,
   instanceQuery,
   selectedInstanceId,
+  imageQuery,
+  keypairQuery,
   onNavigate,
   onInstanceQuery,
   onInstanceOpen,
   onInstanceClose,
+  onImageQuery,
+  onKeyPairQuery,
   onSwitch,
   onExpired,
   onLogout,
@@ -957,14 +1008,18 @@ function ProjectWorkspace({
   language: ReactNode
   session: Session
   error?: ErrorInfo
-  view: 'overview' | 'quotas' | 'instances'
+  view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs'
   filter: QuotaFilter
   instanceQuery: InstanceQuery
   selectedInstanceId?: string
-  onNavigate: (view: 'overview' | 'quotas' | 'instances', filter?: QuotaFilter) => void
+  imageQuery: ImageQuery
+  keypairQuery: InventoryQuery
+  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs', filter?: QuotaFilter) => void
   onInstanceQuery: (query: InstanceQuery, mode: 'push' | 'replace') => void
   onInstanceOpen: (instanceId: string) => void
   onInstanceClose: () => void
+  onImageQuery: (query: ImageQuery, mode: 'push' | 'replace') => void
+  onKeyPairQuery: (query: InventoryQuery, mode: 'push' | 'replace') => void
   onSwitch: () => void
   onExpired: () => void
   onLogout: () => void
@@ -1038,6 +1093,29 @@ function ProjectWorkspace({
         >
           {t.instances}
         </a>
+        <a
+          href="/images"
+          className={view === 'images' ? 'selected' : undefined}
+          aria-current={view === 'images' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('images')
+          }}
+        >
+          {t.images}
+        </a>
+        <strong>{t.access}</strong>
+        <a
+          href="/keypairs"
+          className={view === 'keypairs' ? 'selected' : undefined}
+          aria-current={view === 'keypairs' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('keypairs')
+          }}
+        >
+          {t.keypairs}
+        </a>
       </aside>
       <main className="content">
         <ErrorNotice error={message ?? error} referenceLabel={t.requestReference} />
@@ -1059,7 +1137,7 @@ function ProjectWorkspace({
             onFilter={(next) => onNavigate('quotas', next)}
             onExpired={onExpired}
           />
-        ) : (
+        ) : view === 'instances' ? (
           <InstancesPage
             key={`${scope.project.id}:${scope.region}:instances`}
             scopeKey={`${scope.project.id}:${scope.region}`}
@@ -1069,6 +1147,22 @@ function ProjectWorkspace({
             onQuery={onInstanceQuery}
             onOpen={onInstanceOpen}
             onClose={onInstanceClose}
+            onExpired={onExpired}
+          />
+        ) : view === 'images' ? (
+          <ImagesPage
+            scopeKey={`${scope.project.id}:${scope.region}`}
+            locale={locale}
+            query={imageQuery}
+            onQuery={onImageQuery}
+            onExpired={onExpired}
+          />
+        ) : (
+          <KeyPairsPage
+            scopeKey={`${scope.project.id}:${scope.region}`}
+            locale={locale}
+            query={keypairQuery}
+            onQuery={onKeyPairQuery}
             onExpired={onExpired}
           />
         )}

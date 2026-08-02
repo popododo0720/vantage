@@ -144,11 +144,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
       responses:
         "200":
           description: Accessible projects
@@ -290,11 +285,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
         - name: status
           in: query
           schema:
@@ -652,11 +642,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
       responses:
         "200":
           description: Paginated allowed Flavors
@@ -676,11 +661,6 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
       responses:
         "200":
           description: Paginated keypairs without private material
@@ -754,10 +734,12 @@ paths:
           in: query
           schema:
             type: string
+            maxLength: 255
         - name: status
           in: query
           schema:
             type: string
+            maxLength: 64
       responses:
         "200":
           description: Paginated Neutron networks
@@ -781,6 +763,7 @@ paths:
           in: query
           schema:
             type: string
+            maxLength: 255
       responses:
         "200":
           description: Paginated Neutron security groups
@@ -2283,28 +2266,29 @@ components:
           type: string
           format: uuid
         name:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         status:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         visibility:
-          type: string
-          enum: [private, shared, community, public]
+          anyOf:
+            - type: string
+              enum: [private, shared, community, public]
+            - type: "null"
         disk_format:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         container_format:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         size_bytes:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         min_disk_gib:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         min_ram_mib:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         created_at:
-          type: string
-          format: date-time
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
     ImagePage:
       type: object
       additionalProperties: false
@@ -2324,21 +2308,17 @@ components:
         id:
           type: string
         name:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         vcpus:
-          type: integer
-          minimum: 1
+          anyOf: [{type: integer, minimum: 1}, {type: "null"}]
         ram_mib:
-          type: integer
-          minimum: 1
+          anyOf: [{type: integer, minimum: 1}, {type: "null"}]
         disk_gib:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         ephemeral_gib:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         is_public:
-          type: boolean
+          anyOf: [{type: boolean}, {type: "null"}]
     FlavorPage:
       type: object
       additionalProperties: false
@@ -2358,15 +2338,19 @@ components:
         name:
           type: string
         type:
-          type: string
-          enum: [ssh, x509]
+          anyOf:
+            - type: string
+              enum: [ssh, x509]
+            - type: "null"
         fingerprint:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         public_key_preview:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         created_at:
-          type: string
-          format: date-time
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
         last_used_at:
           anyOf:
             - type: string
@@ -2422,18 +2406,17 @@ components:
           type: string
           format: uuid
         name:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         status:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         shared:
-          type: boolean
+          anyOf: [{type: boolean}, {type: "null"}]
         external:
-          type: boolean
+          anyOf: [{type: boolean}, {type: "null"}]
         mtu:
-          type: integer
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         subnet_count:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
     NetworkPage:
       type: object
       additionalProperties: false
@@ -2454,15 +2437,13 @@ components:
           type: string
           format: uuid
         name:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         description:
-          type: string
+          anyOf: [{type: string}, {type: "null"}]
         rule_count:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
         revision_number:
-          type: integer
-          minimum: 0
+          anyOf: [{type: integer, minimum: 0}, {type: "null"}]
     SecurityGroupPage:
       type: object
       additionalProperties: false
