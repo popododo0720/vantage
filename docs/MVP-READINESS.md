@@ -1,7 +1,8 @@
 # MVP Planning and Design Readiness
 
-Status: planning and Penpot design have passed the pre-development review.
-Development has not started and must not start before user approval.
+Status: planning and Penpot design passed review. User approval was received,
+and the Goal 1.1 session plus explicit-scope foundation is now implemented for
+local verification. Later Goal 1 slices remain contract-only.
 
 This checklist separates design-contract evidence from checks that can only
 pass after an implementation exists. A Penpot board or OpenAPI operation is
@@ -9,24 +10,26 @@ evidence of an agreed contract, not evidence that the deployed behavior works.
 
 ## Goal 1 Contract Gate
 
-| Capability | Planning evidence | Design evidence | Status before development |
+| Capability | Planning evidence | Design evidence | Delivery status |
 | --- | --- | --- | --- |
-| Login, logout, session expiry | `GOAL1-FLOWS.md`, `SECURITY.md`, OpenAPI | Login, Login Error, Project Selection | Contracted |
-| Project and region scope switch | `ARCHITECTURE.md`, `GOAL1-FLOWS.md`, OpenAPI | Project Selection, Project Switcher | Contracted |
-| Quota-first overview | `PRD.md`, `GOAL1-FLOWS.md`, OpenAPI | Project Overview, Quota Details, Dashboard States | Contracted |
-| Instance list and detail | `MVP-INTERACTIONS.md`, OpenAPI | Instances, page-size state, detail drawer | Contracted |
-| Four-step instance create | `GOAL1-FLOWS.md`, OpenAPI | Create Instance steps 1-4 | Contracted |
-| Instance edit, delete, lifecycle | `RESOURCE-INTERACTIONS.md`, OpenAPI | Edit Name, Row Actions, Delete Confirm, Actions EN/KO | Contracted |
-| Resize confirm or revert | `MVP-INTERACTIONS.md`, OpenAPI | Resize, Resize Verify | Contracted |
-| NIC and allowed port edits | `RESOURCE-INTERACTIONS.md`, OpenAPI | Instance Network, NIC Edit, NIC Attach, NIC Detach Confirm | Contracted |
-| Floating IP lifecycle | `RESOURCE-INTERACTIONS.md`, OpenAPI | Instance Floating IP, Disassociate Confirm, Release Confirm | Contracted |
-| Volume attach or detach | `RESOURCE-INTERACTIONS.md`, OpenAPI | Volume Attach, Detach Confirm, Attachment Conflict | Contracted |
-| Key-pair lifecycle | `RESOURCE-INTERACTIONS.md`, OpenAPI | Key Pairs, Create, Private Key, Delete Confirm | Contracted |
-| noVNC session | `SECURITY.md`, OpenAPI | noVNC | Contracted |
+| Login, logout, session expiry | `GOAL1-FLOWS.md`, `SECURITY.md`, runtime OpenAPI | Login, Login Error, Project Selection | Implemented locally; reference-cloud validation pending |
+| Project and region scope switch | `ARCHITECTURE.md`, `GOAL1-FLOWS.md`, runtime OpenAPI | Project Selection, Project Switcher | Implemented locally; reference-cloud validation pending |
+| Quota-first overview | `PRD.md`, `GOAL1-FLOWS.md`, planned Goal 1 OpenAPI | Project Overview, Quota Details, Dashboard States | Contracted |
+| Instance list and detail | `MVP-INTERACTIONS.md`, planned Goal 1 OpenAPI | Instances, page-size state, detail drawer | Contracted |
+| Four-step instance create | `GOAL1-FLOWS.md`, planned Goal 1 OpenAPI | Create Instance steps 1-4 | Contracted |
+| Instance edit, delete, lifecycle | `RESOURCE-INTERACTIONS.md`, planned Goal 1 OpenAPI | Edit Name, Row Actions, Delete Confirm, Actions EN/KO | Contracted |
+| Resize confirm or revert | `MVP-INTERACTIONS.md`, planned Goal 1 OpenAPI | Resize, Resize Verify | Contracted |
+| NIC and allowed port edits | `RESOURCE-INTERACTIONS.md`, planned Goal 1 OpenAPI | Instance Network, NIC Edit, NIC Attach, NIC Detach Confirm | Contracted |
+| Floating IP lifecycle | `RESOURCE-INTERACTIONS.md`, planned Goal 1 OpenAPI | Instance Floating IP, Disassociate Confirm, Release Confirm | Contracted |
+| Volume attach or detach | `RESOURCE-INTERACTIONS.md`, planned Goal 1 OpenAPI | Volume Attach, Detach Confirm, Attachment Conflict | Contracted |
+| Key-pair lifecycle | `RESOURCE-INTERACTIONS.md`, planned Goal 1 OpenAPI | Key Pairs, Create, Private Key, Delete Confirm | Contracted |
+| noVNC session | `SECURITY.md`, planned Goal 1 OpenAPI | noVNC | Contracted |
 | English and Korean | `GOAL1-FLOWS.md`, `DESIGN.md` | locale controls and Actions EN/KO | Contracted |
 
-`Contracted` means the expected behavior is specified. It does not mean the
-feature has been implemented or tested.
+`Implemented locally` means the fake-adapter vertical slice and automated local
+checks pass. It does not claim TLS ingress, shared sessions, or a real Keystone
+deployment. `Contracted` means the expected behavior is specified but the slice
+has not been implemented.
 
 ## Shared Interaction Gate
 
@@ -123,7 +126,8 @@ recovery contract is:
 Administration collection routes and schemas remain a Goal 4 API-contract task.
 Before implementation, each row above must gain explicit server-side filters,
 page metadata, mutation schemas, and documented `403`/`404`/`409` outcomes in
-OpenAPI. The existing Goal 1 OpenAPI does not claim these routes.
+a Goal 4 OpenAPI contract. Neither the runtime nor planned Goal 1 contract
+claims these administrator routes.
 
 ## Penpot Inventory
 
@@ -206,7 +210,13 @@ file validator reports zero errors.
 
 ## Current OpenAPI Checks
 
-The current structural validation reports:
+The implemented runtime contract reports:
+
+- 6 operations with exact path and method parity against the FastAPI runtime;
+- only the session, login, project-list, and explicit-scope routes delivered by
+  Goal 1.1.
+
+The separate planned Goal 1 contract reports:
 
 - 40 operations and 40 unique operation IDs;
 - no missing internal component references;
@@ -218,15 +228,16 @@ The current structural validation reports:
   mutations. Session preference, logout, scope selection, and short-lived
   console URL issuance are the documented non-resource exceptions.
 
-A full YAML/OpenAPI parser is not installed in the local environment, so this
-check must be rerun through the repository validation workflow or an external
-OpenAPI validator after the branch is published. Structural checks are not
-misrepresented as a full schema parse.
+Goal 1.1 adds `openapi-spec-validator` to the development dependencies. Both
+`api/openapi.yaml` and `api/openapi.goal1-mvp.yaml` are parsed and
+reference-validated locally. The test suite additionally compares every
+published runtime path and method with FastAPI, and CI repeats both checks.
 
-## Pre-Development Decision
+## Incremental Development Gate
 
-Development remains blocked on explicit user approval of the planning and
-Penpot design. After approval, Goal 1 implementation must still pass:
+User approval started incremental Goal 1 development. Goal 1.1 and the explicit
+scope foundation are the only implemented runtime boundary in this branch.
+Each later slice must still pass:
 
 - current OpenAPI parser and reference validation;
 - authentication and cross-project isolation tests;

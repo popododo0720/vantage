@@ -2,12 +2,12 @@ openapi: 3.1.0
 info:
   title: Vantage BFF API
   version: 0.1.0
-  summary: Goal 1 contract for the initial usable project MVP
+  summary: Implemented Goal 1.1 session and project-scope API
   description: |
-    Browser-facing API for Vantage Goal 1: secure project entry, quota-first
-    overview, daily instance lifecycle, connectivity, volume attachment, and
-    noVNC. The browser never receives an OpenStack token or calls an OpenStack
-    service endpoint directly.
+    Browser-facing API implemented by the current Vantage runtime. The browser
+    never receives an OpenStack token or calls an OpenStack service endpoint
+    directly. The later Goal 1 MVP contract is maintained separately in
+    `openapi.goal1-mvp.yaml` and is not an implemented runtime contract.
 servers:
   - url: /api/v1
 security:
@@ -17,30 +17,6 @@ tags:
     description: Browser session lifecycle backed by Keystone authentication.
   - name: Projects
     description: Accessible projects and the active project scope.
-  - name: Overview
-    description: Quota-first, partially resilient project summary.
-  - name: Quotas
-    description: Detailed finite quota set for the active project and region.
-  - name: ResourceContracts
-    description: Capability, mutability, and action descriptors for Goal 1 resources.
-  - name: Instances
-    description: Project instance inventory, provisioning, and lifecycle.
-  - name: Operations
-    description: Asynchronous command state and upstream request correlation.
-  - name: Images
-    description: Server-filtered Glance image inventory.
-  - name: Flavors
-    description: Server-filtered Nova Flavor inventory.
-  - name: KeyPairs
-    description: Project keypair inventory and one-time key generation.
-  - name: Networks
-    description: Goal 1 Neutron networks, ports, and interface attachments.
-  - name: SecurityGroups
-    description: Project security groups available to provisioning and ports.
-  - name: FloatingIPs
-    description: Project Floating-IP allocation and association.
-  - name: Volumes
-    description: Project Cinder volumes and instance attachments.
 paths:
   /session:
     get:
@@ -50,6 +26,9 @@ paths:
       responses:
         "200":
           description: Authenticated session
+          headers:
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
@@ -71,21 +50,36 @@ paths:
       responses:
         "200":
           description: Updated session preferences
+          headers:
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
     delete:
       tags: [Session]
       summary: Sign out and invalidate the server session
+      description: |
+        Idempotent when the session is absent or expired. A live session
+        requires its session-bound CSRF token.
       operationId: deleteSession
+      security:
+        - sessionCookie: []
+        - {}
       parameters:
-        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/OptionalCsrfToken"
       responses:
         "204":
-          description: Session deleted
+          description: Session deleted or already absent
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /session/login:
     post:
       tags: [Session]
@@ -103,17 +97,25 @@ paths:
           description: Session created
           headers:
             Set-Cookie:
-              description: Opaque HttpOnly, Secure, SameSite session cookie
+              description: Opaque HttpOnly, Secure, SameSite session cookie.
               schema:
                 type: string
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
   /projects:
     get:
       tags: [Projects]
@@ -129,13 +131,15 @@ paths:
             maxLength: 255
       responses:
         "200":
-          description: Accessible projects
+          description: Server-filtered project page
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProjectPage"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
   /scope:
     put:
       tags: [Projects]
@@ -151,7 +155,14 @@ paths:
               $ref: "#/components/schemas/ScopeRequest"
       responses:
         "200":
-          description: New project-scoped session context
+          description: Rotated project-scoped session context
+          headers:
+            Set-Cookie:
+              description: Rotated opaque session cookie.
+              schema:
+                type: string
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
@@ -160,872 +171,22 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
-        "409":
-          description: Scope could not be established
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-  /overview:
-    get:
-      tags: [Overview]
-      summary: Get the active project's quota-first overview
-      operationId: getProjectOverview
-      responses:
-        "200":
-          description: Overview with independent widget results
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProjectOverview"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /quotas:
-    get:
-      tags: [Quotas]
-      summary: Get detailed quotas for the active project
-      operationId: getProjectQuotas
-      parameters:
-        - name: service
-          in: query
-          schema:
-            type: string
-            enum: [compute, network, storage]
-      responses:
-        "200":
-          description: Detailed quotas with independent service failures
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/QuotaCollection"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /resource-contracts/{resource_type}:
-    get:
-      tags: [ResourceContracts]
-      summary: Get fields and actions supported for a Goal 1 resource
-      operationId: getResourceContract
-      parameters:
-        - name: resource_type
-          in: path
-          required: true
-          schema:
-            type: string
-            enum:
-              - instance
-              - image
-              - flavor
-              - keypair
-              - network
-              - port
-              - security_group
-              - floating_ip
-              - volume
-        - name: resource_id
-          in: query
-          description: Optional resource used to resolve state-dependent actions.
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Active-scope field and action contract
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ResourceContract"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /instances:
-    get:
-      tags: [Instances]
-      summary: List instances in the active project
-      operationId: listInstances
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
-        - name: status
-          in: query
-          schema:
-            type: string
-        - name: image_id
-          in: query
-          schema:
-            type: string
-        - name: sort
-          in: query
-          schema:
-            type: string
-            enum: [created_at, name, status]
-            default: created_at
-        - name: direction
-          in: query
-          schema:
-            type: string
-            enum: [asc, desc]
-            default: desc
-      responses:
-        "200":
-          description: Paginated project instances
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InstancePage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [Instances]
-      summary: Create one or more instances in the active project
-      operationId: createInstances
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateInstanceRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}:
-    get:
-      tags: [Instances]
-      summary: Get one instance in the active project
-      operationId: getInstance
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-      responses:
-        "200":
-          description: Instance detail
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InstanceDetail"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    patch:
-      tags: [Instances]
-      summary: Update permitted instance properties
-      operationId: updateInstance
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateInstanceRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
-    delete:
-      tags: [Instances]
-      summary: Delete an instance with explicit dependent-resource behavior
-      operationId: deleteInstance
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - name: delete_attached_volumes
-          in: query
-          schema:
-            type: boolean
-            default: false
-        - name: release_floating_ips
-          in: query
-          schema:
-            type: boolean
-            default: false
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/delete-preview:
-    get:
-      tags: [Instances]
-      summary: Preview bounded dependency outcomes before deleting an instance
-      operationId: previewInstanceDelete
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-      responses:
-        "200":
-          description: Dependency and retention preview
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DeletePreview"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /instances/{instance_id}/actions:
-    post:
-      tags: [Instances]
-      summary: Run a state-aware instance lifecycle action
-      operationId: runInstanceAction
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/InstanceActionRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/resize:
-    post:
-      tags: [Instances]
-      summary: Start an asynchronous resize
-      operationId: resizeInstance
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ResizeInstanceRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/resize/confirm:
-    post:
-      tags: [Instances]
-      summary: Confirm a server in VERIFY_RESIZE
-      operationId: confirmInstanceResize
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/resize/revert:
-    post:
-      tags: [Instances]
-      summary: Revert a server in VERIFY_RESIZE
-      operationId: revertInstanceResize
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/console:
-    post:
-      tags: [Instances]
-      summary: Create a short-lived remote console session
-      operationId: createInstanceConsole
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ConsoleRequest"
-      responses:
-        "201":
-          description: Short-lived console URL; never persist or log it
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ConsoleSession"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "501":
-          description: Requested console type is unsupported by this cloud
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
-  /operations/{operation_id}:
-    get:
-      tags: [Operations]
-      summary: Get asynchronous operation state
-      operationId: getOperation
-      parameters:
-        - $ref: "#/components/parameters/OperationId"
-      responses:
-        "200":
-          description: Current operation state and request correlation
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Operation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /images:
-    get:
-      tags: [Images]
-      summary: List images available to the active project
-      operationId: listImages
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
-        - name: visibility
-          in: query
-          schema:
-            type: string
-            enum: [private, shared, community, public]
-      responses:
-        "200":
-          description: Paginated Glance images
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ImagePage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /flavors:
-    get:
-      tags: [Flavors]
-      summary: List Flavors available to the active project
-      operationId: listFlavors
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
-      responses:
-        "200":
-          description: Paginated allowed Flavors
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FlavorPage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /keypairs:
-    get:
-      tags: [KeyPairs]
-      summary: List keypairs in the active project
-      operationId: listKeyPairs
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-            maxLength: 255
-      responses:
-        "200":
-          description: Paginated keypairs without private material
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/KeyPairPage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [KeyPairs]
-      summary: Generate or import a keypair
-      operationId: createKeyPair
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateKeyPairRequest"
-      responses:
-        "201":
-          description: Created keypair; generated private material appears once
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CreatedKeyPair"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /keypairs/{keypair_name}:
-    delete:
-      tags: [KeyPairs]
-      summary: Delete a project keypair
-      operationId: deleteKeyPair
-      parameters:
-        - name: keypair_name
-          in: path
-          required: true
-          schema:
-            type: string
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "204":
-          description: Keypair deleted
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /networks:
-    get:
-      tags: [Networks]
-      summary: List project-visible Neutron networks
-      operationId: listNetworks
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-        - name: status
-          in: query
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Paginated Neutron networks
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/NetworkPage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /security-groups:
-    get:
-      tags: [SecurityGroups]
-      summary: List project-visible security groups
-      operationId: listSecurityGroups
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Paginated Neutron security groups
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SecurityGroupPage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /instances/{instance_id}/interfaces:
-    get:
-      tags: [Networks]
-      summary: List attached instance interfaces
-      operationId: listInstanceInterfaces
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-      responses:
-        "200":
-          description: Attached Nova interfaces backed by Neutron ports
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InterfacePage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    post:
-      tags: [Networks]
-      summary: Attach a network or compatible existing port
-      operationId: attachInstanceInterface
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AttachInterfaceRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/interfaces/{port_id}:
-    delete:
-      tags: [Networks]
-      summary: Detach an instance interface
-      operationId: detachInstanceInterface
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/PortId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /ports/{port_id}:
-    patch:
-      tags: [Networks]
-      summary: Update supported Neutron port properties
-      operationId: updatePort
-      parameters:
-        - $ref: "#/components/parameters/PortId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdatePortRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /floating-ips:
-    get:
-      tags: [FloatingIPs]
-      summary: List Floating IPs in the active project
-      operationId: listFloatingIPs
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: status
-          in: query
-          schema:
-            type: string
-        - name: port_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: Paginated Neutron Floating IPs
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FloatingIPPage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [FloatingIPs]
-      summary: Allocate a Floating IP with optional association
-      operationId: createFloatingIP
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateFloatingIPRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /floating-ips/{floating_ip_id}:
-    patch:
-      tags: [FloatingIPs]
-      summary: Associate or disassociate a Floating IP
-      operationId: updateFloatingIP
-      parameters:
-        - $ref: "#/components/parameters/FloatingIPId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateFloatingIPRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-    delete:
-      tags: [FloatingIPs]
-      summary: Release an unneeded Floating IP allocation
-      operationId: deleteFloatingIP
-      parameters:
-        - $ref: "#/components/parameters/FloatingIPId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /volumes:
-    get:
-      tags: [Volumes]
-      summary: List volumes in the active project
-      operationId: listVolumes
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-        - name: name
-          in: query
-          schema:
-            type: string
-        - name: status
-          in: query
-          schema:
-            type: string
-        - name: attachment
-          in: query
-          schema:
-            type: string
-            enum: [all, attached, available]
-            default: all
-      responses:
-        "200":
-          description: Paginated Cinder volumes
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/VolumePage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /instances/{instance_id}/volume-attachments:
-    get:
-      tags: [Volumes]
-      summary: List an instance's volume attachments
-      operationId: listInstanceVolumeAttachments
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/PageNumber"
-      responses:
-        "200":
-          description: Current Cinder/Nova attachment state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/VolumeAttachmentPage"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    post:
-      tags: [Volumes]
-      summary: Attach a project volume to an instance
-      operationId: attachInstanceVolume
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AttachVolumeRequest"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /instances/{instance_id}/volume-attachments/{volume_id}:
-    delete:
-      tags: [Volumes]
-      summary: Detach a volume without deleting it
-      operationId: detachInstanceVolume
-      parameters:
-        - $ref: "#/components/parameters/InstanceId"
-        - $ref: "#/components/parameters/VolumeId"
-        - $ref: "#/components/parameters/CsrfToken"
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "202":
-          $ref: "#/components/responses/AcceptedOperation"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
 components:
+  headers:
+    CsrfToken:
+      description: Session-bound CSRF token retained only in browser memory.
+      schema:
+        type: string
   securitySchemes:
     sessionCookie:
       type: apiKey
@@ -1040,15 +201,13 @@ components:
       description: Bound to the current Vantage server session.
       schema:
         type: string
-    IdempotencyKey:
-      name: Idempotency-Key
+    OptionalCsrfToken:
+      name: X-CSRF-Token
       in: header
-      required: true
-      description: Unique per logical mutation within the active scope.
+      required: false
+      description: Required only when a live Vantage session exists.
       schema:
         type: string
-        minLength: 16
-        maxLength: 255
     Limit:
       name: limit
       in: query
@@ -1060,87 +219,56 @@ components:
     PageNumber:
       name: page
       in: query
-      description: |
-        One-based visible page number. The BFF resolves it through a
-        scope- and query-bound upstream cursor/marker chain.
+      description: One-based page number.
       schema:
         type: integer
         minimum: 1
         default: 1
-    InstanceId:
-      name: instance_id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    OperationId:
-      name: operation_id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    PortId:
-      name: port_id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    FloatingIPId:
-      name: floating_ip_id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    VolumeId:
-      name: volume_id
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
   responses:
-    AcceptedOperation:
-      description: Command accepted for asynchronous processing
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Operation"
-    BadRequest:
-      description: Request validation or unsupported capability failure
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/Problem"
     Unauthenticated:
-      description: The Vantage session is missing or expired
+      description: The Vantage session is missing or expired.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     Forbidden:
-      description: OpenStack policy denied the active user's request
+      description: The request failed CSRF or OpenStack policy enforcement.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     NotFound:
-      description: Resource not found in the active scope
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/Problem"
-    RateLimited:
-      description: Too many authentication attempts
+      description: The requested project scope is unavailable.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: Resource state, revision, or duplicate-operation conflict
+      description: The requested scope could not be established.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    RateLimited:
+      description: Too many requests at the Vantage or identity boundary.
+      headers:
+        Retry-After:
+          description: Seconds before retry when provided by the boundary.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: The identity service is temporarily unavailable.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InvalidRequest:
+      description: Request schema or query validation failed.
       content:
         application/problem+json:
           schema:
@@ -1163,10 +291,18 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+    SessionPreferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [locale]
+      properties:
+        locale:
+          type: string
+          enum: [en, ko]
     Session:
       type: object
       additionalProperties: false
-      required: [user, expires_at, projects, regions, locale]
+      required: [user, active_scope, expires_at, regions, locale]
       properties:
         user:
           $ref: "#/components/schemas/User"
@@ -1177,10 +313,6 @@ components:
         expires_at:
           type: string
           format: date-time
-        projects:
-          type: array
-          items:
-            $ref: "#/components/schemas/Project"
         regions:
           type: array
           items:
@@ -1188,38 +320,36 @@ components:
         locale:
           type: string
           enum: [en, ko]
-    SessionPreferenceRequest:
-      type: object
-      additionalProperties: false
-      required: [locale]
-      properties:
-        locale:
-          type: string
-          enum: [en, ko]
     User:
       type: object
       additionalProperties: false
-      required: [id, name]
+      required: [id, name, domain_id]
       properties:
         id:
           type: string
         name:
           type: string
         domain_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
     Project:
       type: object
       additionalProperties: false
-      required: [id, name]
+      required: [id, name, domain_id, enabled]
       properties:
         id:
           type: string
         name:
           type: string
         domain_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
         enabled:
-          type: boolean
+          anyOf:
+            - type: boolean
+            - type: "null"
     ScopeRequest:
       type: object
       additionalProperties: false
@@ -1238,133 +368,6 @@ components:
           $ref: "#/components/schemas/Project"
         region:
           type: string
-    SupportState:
-      type: string
-      enum:
-        - available
-        - immutable
-        - capability_gated
-        - policy_gated
-        - state_gated
-        - upstream_absent
-        - deferred
-    FieldDescriptor:
-      type: object
-      additionalProperties: false
-      required:
-        - key
-        - label_key
-        - group
-        - value_type
-        - mutable
-        - support_state
-      properties:
-        key:
-          type: string
-        label_key:
-          type: string
-        group:
-          type: string
-          enum: [basic, advanced, access, relationship]
-        service:
-          type: string
-        api_field:
-          type: string
-        sdk_argument:
-          type: string
-        cli_equivalent:
-          type: string
-        value_type:
-          type: string
-          enum:
-            - string
-            - integer
-            - number
-            - boolean
-            - uuid
-            - select
-            - multiselect
-            - key_value
-            - array
-            - secret
-        required:
-          type: boolean
-          default: false
-        mutable:
-          type: boolean
-        can_unset:
-          type: boolean
-          default: false
-        sensitive:
-          type: boolean
-          default: false
-        default_value: {}
-        constraints:
-          type: object
-          additionalProperties: true
-        capability:
-          type: string
-        microversion:
-          type: string
-        support_state:
-          $ref: "#/components/schemas/SupportState"
-        reason:
-          type: string
-    ActionDescriptor:
-      type: object
-      additionalProperties: false
-      required: [key, label_key, kind, support_state]
-      properties:
-        key:
-          type: string
-        label_key:
-          type: string
-        kind:
-          type: string
-          enum:
-            - edit
-            - set_unset
-            - relationship
-            - lifecycle
-            - clone
-            - delete
-            - force_delete
-        destructive:
-          type: boolean
-          default: false
-        typed_confirmation:
-          type: boolean
-          default: false
-        capability:
-          type: string
-        microversion:
-          type: string
-        support_state:
-          $ref: "#/components/schemas/SupportState"
-        reason:
-          type: string
-    ResourceContract:
-      type: object
-      additionalProperties: false
-      required: [resource_type, fields, actions, generated_at]
-      properties:
-        resource_type:
-          type: string
-        service:
-          type: string
-        resource_id:
-          type: string
-        fields:
-          type: array
-          items:
-            $ref: "#/components/schemas/FieldDescriptor"
-        actions:
-          type: array
-          items:
-            $ref: "#/components/schemas/ActionDescriptor"
-        generated_at:
-          type: string
-          format: date-time
     PageInfo:
       type: object
       additionalProperties: false
@@ -1373,9 +376,12 @@ components:
         - size
         - item_from
         - item_to
+        - total_items
+        - total_pages
         - has_previous
         - has_next
         - navigable_pages
+        - openstack_request_id
       properties:
         number:
           type: integer
@@ -1386,36 +392,33 @@ components:
         item_from:
           type: integer
           minimum: 0
-          description: One-based first item, or 0 for an empty page.
         item_to:
           type: integer
           minimum: 0
-          description: One-based final item, or 0 for an empty page.
         total_items:
           anyOf:
             - type: integer
               minimum: 0
             - type: "null"
-          description: Null when the upstream service has no reliable bounded count.
         total_pages:
           anyOf:
             - type: integer
               minimum: 0
             - type: "null"
-          description: Null when total_items is unknown.
         has_previous:
           type: boolean
         has_next:
           type: boolean
         navigable_pages:
           type: array
-          description: Page numbers that the BFF can resolve without an unbounded scan.
           items:
             type: integer
             minimum: 1
           uniqueItems: true
         openstack_request_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
     ProjectPage:
       type: object
       additionalProperties: false
@@ -1427,1083 +430,10 @@ components:
             $ref: "#/components/schemas/Project"
         page:
           $ref: "#/components/schemas/PageInfo"
-    Quota:
-      type: object
-      additionalProperties: false
-      required: [service, resource, used, reserved]
-      properties:
-        service:
-          type: string
-          enum: [compute, network, storage]
-        resource:
-          type: string
-          enum:
-            - instances
-            - cores
-            - ram_mib
-            - volumes
-            - gigabytes
-            - snapshots
-            - backups
-            - backup_gigabytes
-            - floating_ips
-        used:
-          type: number
-          minimum: 0
-        reserved:
-          type: number
-          minimum: 0
-        limit:
-          anyOf:
-            - type: number
-            - type: "null"
-        unit:
-          type: string
-          enum: [count, MiB, GiB]
-        state:
-          type: string
-          enum: [normal, watch, high, unknown]
-    QuotaCollection:
-      type: object
-      additionalProperties: false
-      required: [scope, generated_at, quotas, partial_errors]
-      properties:
-        scope:
-          $ref: "#/components/schemas/Scope"
-        generated_at:
-          type: string
-          format: date-time
-        stale:
-          type: boolean
-          default: false
-        quotas:
-          type: array
-          items:
-            $ref: "#/components/schemas/Quota"
-        partial_errors:
-          type: array
-          items:
-            $ref: "#/components/schemas/WidgetError"
-    WidgetError:
-      type: object
-      additionalProperties: false
-      required: [code, message]
-      properties:
-        code:
-          type: string
-        message:
-          type: string
-        openstack_request_id:
-          type: string
-    ProjectOverview:
-      type: object
-      additionalProperties: false
-      required: [scope, generated_at, quotas, instance_summary, partial_errors]
-      properties:
-        scope:
-          $ref: "#/components/schemas/Scope"
-        generated_at:
-          type: string
-          format: date-time
-        stale:
-          type: boolean
-          default: false
-        quotas:
-          type: array
-          items:
-            $ref: "#/components/schemas/Quota"
-        instance_summary:
-          $ref: "#/components/schemas/InstanceSummary"
-        partial_errors:
-          type: array
-          items:
-            $ref: "#/components/schemas/WidgetError"
-    InstanceSummary:
-      type: object
-      additionalProperties: false
-      required: [total, active, stopped, error]
-      properties:
-        total:
-          type: integer
-          minimum: 0
-        active:
-          type: integer
-          minimum: 0
-        stopped:
-          type: integer
-          minimum: 0
-        error:
-          type: integer
-          minimum: 0
-    Instance:
-      type: object
-      additionalProperties: false
-      required: [id, name, status, created_at]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        status:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        flavor:
-          type: string
-        image:
-          type: string
-        addresses:
-          type: array
-          items:
-            type: string
-    InstancePage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Instance"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    InstanceDetail:
-      allOf:
-        - $ref: "#/components/schemas/Instance"
-        - type: object
-          properties:
-            volumes:
-              type: array
-              items:
-                type: object
-                required: [id]
-                properties:
-                  id:
-                    type: string
-                  device:
-                    type: string
-            openstack_request_id:
-              type: string
-    DeleteDependency:
-      type: object
-      additionalProperties: false
-      required: [type, id, relationship, default_outcome]
-      properties:
-        type:
-          type: string
-          enum: [boot_volume, volume, port, floating_ip]
-        id:
-          type: string
-        name:
-          type: string
-        relationship:
-          type: string
-        default_outcome:
-          type: string
-          enum:
-            - retain
-            - detach
-            - disassociate
-            - release
-            - delete
-            - blocked
-        selectable_outcomes:
-          type: array
-          items:
-            type: string
-            enum:
-              - retain
-              - detach
-              - disassociate
-              - release
-              - delete
-          uniqueItems: true
-        reason:
-          type: string
-    DeletePreview:
-      type: object
-      additionalProperties: false
-      required:
-        - resource_type
-        - resource_id
-        - resource_name
-        - dependencies
-        - blockers
-        - typed_confirmation_required
-      properties:
-        resource_type:
-          type: string
-          const: instance
-        resource_id:
-          type: string
-          format: uuid
-        resource_name:
-          type: string
-        dependencies:
-          type: array
-          items:
-            $ref: "#/components/schemas/DeleteDependency"
-        blockers:
-          type: array
-          items:
-            type: string
-        typed_confirmation_required:
-          type: boolean
-        openstack_request_ids:
-          type: array
-          items:
-            type: string
-    NetworkAttachmentRequest:
-      type: object
-      additionalProperties: false
-      description: Exactly one of network_id or port_id is required.
-      oneOf:
-        - required: [network_id]
-          not:
-            required: [port_id]
-        - required: [port_id]
-          not:
-            anyOf:
-              - required: [network_id]
-              - required: [fixed_ip]
-      properties:
-        network_id:
-          type: string
-          format: uuid
-        port_id:
-          type: string
-          format: uuid
-        fixed_ip:
-          type: string
-        tag:
-          type: string
-          maxLength: 60
-    ExternalAccessRequest:
-      type: object
-      additionalProperties: false
-      required: [mode]
-      oneOf:
-        - properties:
-            mode:
-              const: none
-          not:
-            required: [floating_ip_id]
-        - properties:
-            mode:
-              const: allocate
-          not:
-            required: [floating_ip_id]
-        - required: [floating_ip_id]
-          properties:
-            mode:
-              const: associate_existing
-            floating_ip_id:
-              type: string
-              format: uuid
-      properties:
-        mode:
-          type: string
-          enum: [none, allocate, associate_existing]
-        floating_ip_id:
-          type: string
-          format: uuid
-    ImageBootSourceRequest:
-      type: object
-      additionalProperties: false
-      required: [type, image_id]
-      properties:
-        type:
-          type: string
-          const: image
-        image_id:
-          type: string
-          format: uuid
-        create_boot_volume:
-          type: boolean
-          default: false
-        volume_size_gib:
-          type: integer
-          minimum: 1
-        volume_type:
-          type: string
-        delete_on_termination:
-          type: boolean
-          default: true
-    VolumeBootSourceRequest:
-      type: object
-      additionalProperties: false
-      required: [type, volume_id]
-      properties:
-        type:
-          type: string
-          const: volume
-        volume_id:
-          type: string
-          format: uuid
-        delete_on_termination:
-          type: boolean
-          default: false
-    VolumeSnapshotBootSourceRequest:
-      type: object
-      additionalProperties: false
-      required: [type, snapshot_id]
-      properties:
-        type:
-          type: string
-          const: volume_snapshot
-        snapshot_id:
-          type: string
-          format: uuid
-        volume_size_gib:
-          type: integer
-          minimum: 1
-        volume_type:
-          type: string
-        delete_on_termination:
-          type: boolean
-          default: true
-    InstanceBootSourceRequest:
-      oneOf:
-        - $ref: "#/components/schemas/ImageBootSourceRequest"
-        - $ref: "#/components/schemas/VolumeBootSourceRequest"
-        - $ref: "#/components/schemas/VolumeSnapshotBootSourceRequest"
-      discriminator:
-        propertyName: type
-        mapping:
-          image: "#/components/schemas/ImageBootSourceRequest"
-          volume: "#/components/schemas/VolumeBootSourceRequest"
-          volume_snapshot: "#/components/schemas/VolumeSnapshotBootSourceRequest"
-    BlockDeviceRequest:
-      type: object
-      additionalProperties: false
-      required: [source_type, destination_type, boot_index]
-      properties:
-        source_type:
-          type: string
-          enum: [blank, image, volume, snapshot]
-        source_id:
-          type: string
-          format: uuid
-        destination_type:
-          type: string
-          enum: [local, volume]
-        boot_index:
-          type: integer
-          minimum: -1
-        device_name:
-          type: string
-        volume_size_gib:
-          type: integer
-          minimum: 1
-        volume_type:
-          type: string
-        delete_on_termination:
-          type: boolean
-          default: false
-        tag:
-          type: string
-    CreateInstanceRequest:
-      type: object
-      additionalProperties: false
-      required: [name, boot_source, flavor_id, networks]
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        description:
-          type: string
-          maxLength: 255
-        hostname:
-          type: string
-          maxLength: 255
-        count:
-          type: integer
-          minimum: 1
-          default: 1
-        boot_source:
-          $ref: "#/components/schemas/InstanceBootSourceRequest"
-        flavor_id:
-          type: string
-        availability_zone:
-          anyOf:
-            - type: string
-            - type: "null"
-        networks:
-          type: array
-          minItems: 1
-          items:
-            $ref: "#/components/schemas/NetworkAttachmentRequest"
-        security_group_ids:
-          type: array
-          items:
-            type: string
-            format: uuid
-        keypair_name:
-          anyOf:
-            - type: string
-            - type: "null"
-        external_access:
-          $ref: "#/components/schemas/ExternalAccessRequest"
-        metadata:
-          type: object
-          additionalProperties:
-            type: string
-        tags:
-          type: array
-          items:
-            type: string
-          uniqueItems: true
-        user_data:
-          type: string
-          writeOnly: true
-          maxLength: 65535
-        config_drive:
-          type: boolean
-          default: false
-        server_group_id:
-          type: string
-          format: uuid
-        scheduler_hints:
-          type: object
-          additionalProperties:
-            oneOf:
-              - type: string
-              - type: number
-              - type: boolean
-              - type: array
-                items:
-                  type: string
-        block_devices:
-          type: array
-          items:
-            $ref: "#/components/schemas/BlockDeviceRequest"
-        disk_config:
-          type: string
-          enum: [AUTO, MANUAL]
-        admin_password:
-          type: string
-          writeOnly: true
-          minLength: 1
-        trusted_image_certificate_ids:
-          type: array
-          items:
-            type: string
-          uniqueItems: true
-    UpdateInstanceRequest:
-      type: object
-      additionalProperties: false
-      minProperties: 1
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        description:
-          anyOf:
-            - type: string
-              maxLength: 255
-            - type: "null"
-        hostname:
-          type: string
-          maxLength: 255
-        metadata:
-          type: object
-          additionalProperties:
-            type: string
-        unset_metadata:
-          type: array
-          items:
-            type: string
-          uniqueItems: true
-        tags:
-          type: array
-          items:
-            type: string
-          uniqueItems: true
-    InstanceActionRequest:
-      type: object
-      additionalProperties: false
-      required: [action]
-      properties:
-        action:
-          type: string
-          enum:
-            - start
-            - stop
-            - soft_reboot
-            - hard_reboot
-            - pause
-            - unpause
-            - suspend
-            - resume
-            - shelve
-            - unshelve
-    ResizeInstanceRequest:
-      type: object
-      additionalProperties: false
-      required: [flavor_id]
-      properties:
-        flavor_id:
-          type: string
-    ConsoleRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        protocol:
-          type: string
-          const: vnc
-          default: vnc
-        type:
-          type: string
-          const: novnc
-          default: novnc
-    ConsoleSession:
-      type: object
-      additionalProperties: false
-      required: [instance_id, type, url, expires_at]
-      properties:
-        instance_id:
-          type: string
-          format: uuid
-        type:
-          type: string
-          const: novnc
-        url:
-          type: string
-          format: uri
-          description: Sensitive short-lived URL; never log or persist.
-        expires_at:
-          type: string
-          format: date-time
-        openstack_request_id:
-          type: string
-    OperationTarget:
-      type: object
-      additionalProperties: false
-      required: [resource_type]
-      properties:
-        resource_type:
-          type: string
-        resource_id:
-          anyOf:
-            - type: string
-            - type: "null"
-        resource_name:
-          anyOf:
-            - type: string
-            - type: "null"
-    Operation:
-      type: object
-      additionalProperties: false
-      required: [id, kind, status, submitted_at, target]
-      properties:
-        id:
-          type: string
-          format: uuid
-        kind:
-          type: string
-        status:
-          type: string
-          enum: [accepted, running, succeeded, failed, cancelled]
-        submitted_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-        target:
-          $ref: "#/components/schemas/OperationTarget"
-        trace_id:
-          type: string
-        openstack_request_ids:
-          type: array
-          items:
-            type: string
-        problem:
-          anyOf:
-            - $ref: "#/components/schemas/Problem"
-            - type: "null"
-    FixedIPRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        subnet_id:
-          type: string
-          format: uuid
-        ip_address:
-          type: string
-    AttachInterfaceRequest:
-      type: object
-      additionalProperties: false
-      description: Exactly one of network_id or port_id is required.
-      oneOf:
-        - required: [network_id]
-          not:
-            required: [port_id]
-        - required: [port_id]
-          not:
-            anyOf:
-              - required: [network_id]
-              - required: [fixed_ips]
-      properties:
-        network_id:
-          type: string
-          format: uuid
-        port_id:
-          type: string
-          format: uuid
-        fixed_ips:
-          type: array
-          items:
-            $ref: "#/components/schemas/FixedIPRequest"
-    UpdatePortRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        name:
-          type: string
-          maxLength: 255
-        mac_address:
-          type: string
-          description: Capability and resource-state gated.
-        fixed_ips:
-          type: array
-          items:
-            $ref: "#/components/schemas/FixedIPRequest"
-        security_group_ids:
-          type: array
-          items:
-            type: string
-            format: uuid
-        qos_policy_id:
-          anyOf:
-            - type: string
-              format: uuid
-            - type: "null"
-        revision_number:
-          type: integer
-          minimum: 0
-          description: Required by the BFF when revision-aware updates are available.
-    CreateFloatingIPRequest:
-      type: object
-      additionalProperties: false
-      required: [floating_network_id]
-      properties:
-        floating_network_id:
-          type: string
-          format: uuid
-        subnet_id:
-          type: string
-          format: uuid
-        port_id:
-          type: string
-          format: uuid
-        fixed_ip_address:
-          type: string
-        description:
-          type: string
-          maxLength: 255
-    UpdateFloatingIPRequest:
-      type: object
-      additionalProperties: false
-      required: [port_id]
-      properties:
-        port_id:
-          anyOf:
-            - type: string
-              format: uuid
-            - type: "null"
-        fixed_ip_address:
-          anyOf:
-            - type: string
-            - type: "null"
-        revision_number:
-          type: integer
-          minimum: 0
-    AttachVolumeRequest:
-      type: object
-      additionalProperties: false
-      required: [volume_id]
-      properties:
-        volume_id:
-          type: string
-          format: uuid
-        device:
-          type: string
-          description: Optional requested device; the cloud may choose the final device.
-    Image:
-      type: object
-      additionalProperties: false
-      required: [id, name, status, visibility]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        status:
-          type: string
-        visibility:
-          type: string
-          enum: [private, shared, community, public]
-        disk_format:
-          type: string
-        container_format:
-          type: string
-        size_bytes:
-          type: integer
-          minimum: 0
-        min_disk_gib:
-          type: integer
-          minimum: 0
-        min_ram_mib:
-          type: integer
-          minimum: 0
-        created_at:
-          type: string
-          format: date-time
-    ImagePage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Image"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    Flavor:
-      type: object
-      additionalProperties: false
-      required: [id, name, vcpus, ram_mib, disk_gib]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        vcpus:
-          type: integer
-          minimum: 1
-        ram_mib:
-          type: integer
-          minimum: 1
-        disk_gib:
-          type: integer
-          minimum: 0
-        ephemeral_gib:
-          type: integer
-          minimum: 0
-        is_public:
-          type: boolean
-    FlavorPage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Flavor"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    KeyPair:
-      type: object
-      additionalProperties: false
-      required: [name, type, fingerprint]
-      properties:
-        name:
-          type: string
-        type:
-          type: string
-          enum: [ssh, x509]
-        fingerprint:
-          type: string
-        public_key_preview:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        last_used_at:
-          anyOf:
-            - type: string
-              format: date-time
-            - type: "null"
-    KeyPairPage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/KeyPair"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    CreateKeyPairRequest:
-      type: object
-      additionalProperties: false
-      required: [name, type]
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
-        type:
-          type: string
-          enum: [ssh, x509]
-          default: ssh
-        public_key:
-          anyOf:
-            - type: string
-            - type: "null"
-          description: Null generates a keypair; a value imports public material.
-    CreatedKeyPair:
-      type: object
-      additionalProperties: false
-      required: [keypair, private_key]
-      properties:
-        keypair:
-          $ref: "#/components/schemas/KeyPair"
-        private_key:
-          anyOf:
-            - type: string
-            - type: "null"
-          description: One-time generated private material; never persisted by Vantage.
-    Network:
-      type: object
-      additionalProperties: false
-      required: [id, name, status, shared, external]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        status:
-          type: string
-        shared:
-          type: boolean
-        external:
-          type: boolean
-        mtu:
-          type: integer
-        subnet_count:
-          type: integer
-          minimum: 0
-    NetworkPage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Network"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    SecurityGroup:
-      type: object
-      additionalProperties: false
-      required: [id, name, rule_count]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        description:
-          type: string
-        rule_count:
-          type: integer
-          minimum: 0
-        revision_number:
-          type: integer
-          minimum: 0
-    SecurityGroupPage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/SecurityGroup"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    FixedIP:
-      type: object
-      additionalProperties: false
-      required: [ip_address]
-      properties:
-        subnet_id:
-          type: string
-          format: uuid
-        ip_address:
-          type: string
-    Port:
-      type: object
-      additionalProperties: false
-      required: [id, network_id, status, mac_address, fixed_ips]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        network_id:
-          type: string
-          format: uuid
-        status:
-          type: string
-        mac_address:
-          type: string
-        fixed_ips:
-          type: array
-          items:
-            $ref: "#/components/schemas/FixedIP"
-        security_group_ids:
-          type: array
-          items:
-            type: string
-            format: uuid
-        qos_policy_id:
-          anyOf:
-            - type: string
-              format: uuid
-            - type: "null"
-        device_owner:
-          type: string
-        device_id:
-          type: string
-        revision_number:
-          type: integer
-          minimum: 0
-    InterfacePage:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Port"
-    FloatingIP:
-      type: object
-      additionalProperties: false
-      required: [id, floating_ip_address, floating_network_id, status]
-      properties:
-        id:
-          type: string
-          format: uuid
-        floating_ip_address:
-          type: string
-        floating_network_id:
-          type: string
-          format: uuid
-        port_id:
-          anyOf:
-            - type: string
-              format: uuid
-            - type: "null"
-        fixed_ip_address:
-          anyOf:
-            - type: string
-            - type: "null"
-        status:
-          type: string
-        description:
-          type: string
-        revision_number:
-          type: integer
-          minimum: 0
-    FloatingIPPage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/FloatingIP"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    Volume:
-      type: object
-      additionalProperties: false
-      required: [id, name, status, size_gib]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        status:
-          type: string
-        size_gib:
-          type: integer
-          minimum: 0
-        volume_type:
-          type: string
-        bootable:
-          type: boolean
-        multiattach:
-          type: boolean
-        attachment_count:
-          type: integer
-          minimum: 0
-        created_at:
-          type: string
-          format: date-time
-    VolumePage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Volume"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    VolumeAttachment:
-      type: object
-      additionalProperties: false
-      required: [id, volume_id, instance_id, status]
-      properties:
-        id:
-          type: string
-          format: uuid
-        volume_id:
-          type: string
-          format: uuid
-        instance_id:
-          type: string
-          format: uuid
-        status:
-          type: string
-          enum: [attaching, attached, detaching, error]
-        device:
-          type: string
-        attached_at:
-          type: string
-          format: date-time
-    VolumeAttachmentPage:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/VolumeAttachment"
     Problem:
       type: object
-      additionalProperties: true
-      required: [type, title, status]
+      additionalProperties: false
+      required: [type, title, status, detail, code, trace_id]
       properties:
         type:
           type: string
@@ -2513,6 +443,8 @@ components:
         status:
           type: integer
         detail:
+          type: string
+        code:
           type: string
         trace_id:
           type: string
