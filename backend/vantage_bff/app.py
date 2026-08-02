@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, NoReturn, cast
 
 from fastapi import Cookie, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from vantage_bff.adapters.base import (
     AdapterError,
+    AdapterTimeoutError,
     AuthenticationError,
     OpenStackAdapter,
     ScopeError,
@@ -22,7 +23,11 @@ from vantage_bff.adapters.base import (
 from vantage_bff.adapters.fake import FakeOpenStackAdapter
 from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
 from vantage_bff.config import Settings
+from vantage_bff.cursors import CursorKey, MemoryCursorStore
 from vantage_bff.models import (
+    InstanceDetail,
+    InstancePage,
+    InstanceSort,
     InstanceSummary,
     LoginRequest,
     PageInfo,
@@ -36,6 +41,7 @@ from vantage_bff.models import (
     ScopeRequest,
     SessionPreferenceRequest,
     SessionResponse,
+    SortDirection,
     WidgetError,
 )
 from vantage_bff.rate_limit import LoginRateLimiter
@@ -43,6 +49,7 @@ from vantage_bff.sessions import (
     MemorySessionStore,
     SessionRecord,
     SessionStore,
+    new_scope_namespace,
     new_session,
     rotated_session,
 )
@@ -87,11 +94,13 @@ def _adapter(settings: Settings) -> OpenStackAdapter:
         if not settings.auth_url:
             raise RuntimeError("VANTAGE_OS_AUTH_URL is required for the openstack adapter")
         return OpenStackSdkAdapter(
-            settings.auth_url,
-            settings.interface,
-            settings.default_region,
-            settings.request_timeout_seconds,
-            settings.quota_source_timeout_seconds,
+            auth_url=settings.auth_url,
+            interface=settings.interface,
+            default_region=settings.default_region,
+            request_timeout_seconds=settings.request_timeout_seconds,
+            quota_timeout_seconds=settings.quota_source_timeout_seconds,
+            instance_timeout_seconds=settings.instance_source_timeout_seconds,
+            thread_capacity=settings.openstack_sdk_thread_capacity,
         )
     raise RuntimeError(f"Unsupported adapter: {settings.adapter}")
 
@@ -100,6 +109,7 @@ def create_app(
     settings: Settings | None = None,
     adapter: OpenStackAdapter | None = None,
     store: SessionStore | None = None,
+    cursor_store: MemoryCursorStore | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
     frontend_root = Path(__file__).resolve().parents[2] / "frontend" / "dist"
@@ -109,13 +119,18 @@ def create_app(
         app.state.settings = active_settings
         app.state.adapter = adapter or _adapter(active_settings)
         app.state.sessions = store or MemorySessionStore()
+        app.state.instance_cursors = cursor_store or MemoryCursorStore(
+            active_settings.instance_cursor_ttl_seconds,
+            active_settings.instance_cursor_max_chains,
+            active_settings.instance_cursor_max_pages,
+        )
         app.state.login_limiter = LoginRateLimiter(
             active_settings.login_attempt_limit,
             active_settings.login_attempt_window_seconds,
         )
         yield
 
-    app = FastAPI(title="Vantage BFF", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Vantage BFF", version="0.3.0", lifespan=lifespan)
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -215,6 +230,153 @@ def create_app(
             )
         return record
 
+    def instance_cursors(request: Request) -> MemoryCursorStore:
+        return cast(MemoryCursorStore, request.app.state.instance_cursors)
+
+    async def invalidate_session(request: Request, record: SessionRecord) -> None:
+        await request.app.state.sessions.delete(record.id)
+        await instance_cursors(request).invalidate_namespace(record.scope_namespace)
+
+    def active_scope(record: SessionRecord) -> Scope:
+        if record.active_scope is None:
+            raise ApiError(
+                409,
+                "active_scope_required",
+                "Project scope required",
+                "Select a project and region before requesting project resources",
+            )
+        return record.active_scope
+
+    def instance_cursor_key(
+        record: SessionRecord,
+        *,
+        limit: int,
+        name: str | None,
+        status: str | None,
+        image_id: str | None,
+        sort: InstanceSort,
+        direction: SortDirection,
+    ) -> CursorKey:
+        return CursorKey(
+            scope_namespace=record.scope_namespace,
+            resource="instances",
+            query=(
+                ("limit", str(limit)),
+                ("name", name),
+                ("status", status),
+                ("image_id", image_id),
+                ("sort", sort.value),
+                ("direction", direction.value),
+            ),
+        )
+
+    def normalized_optional_filter(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    async def raise_instance_error(
+        request: Request,
+        record: SessionRecord,
+        exc: AdapterError,
+        *,
+        detail: bool,
+        cursor_key: CursorKey | None = None,
+        marker_bound: bool = False,
+    ) -> NoReturn:
+        if isinstance(exc, AdapterTimeoutError) or exc.status_code == 504:
+            raise ApiError(
+                504,
+                "instance_timeout",
+                "Compute request timed out",
+                "The compute service did not respond in time",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 401:
+            await invalidate_session(request, record)
+            raise ApiError(
+                401,
+                "unauthenticated",
+                "Authentication required",
+                "Session missing or expired",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if (
+            not detail
+            and marker_bound
+            and cursor_key is not None
+            and exc.status_code in {400, 404}
+        ):
+            await instance_cursors(request).invalidate(cursor_key)
+            raise ApiError(
+                409,
+                "page_cursor_unavailable",
+                "Page no longer available",
+                "Return to page 1 to rebuild the instance page sequence",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 400:
+            raise ApiError(
+                422,
+                "invalid_instance_filter",
+                "Invalid instance filter",
+                "Nova rejected one or more instance filters",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 403:
+            raise ApiError(
+                403,
+                "instance_forbidden" if detail else "instances_forbidden",
+                "Instance unavailable" if detail else "Instances unavailable",
+                "The compute policy denied this request",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 404:
+            raise ApiError(
+                404,
+                "instance_not_found" if detail else "instances_not_found",
+                "Instance not found" if detail else "Instances unavailable",
+                (
+                    "The instance does not exist in the active project"
+                    if detail
+                    else "The compute service could not find the instance collection"
+                ),
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 409:
+            if cursor_key is not None:
+                await instance_cursors(request).invalidate(cursor_key)
+                raise ApiError(
+                    409,
+                    "page_cursor_unavailable",
+                    "Page no longer available",
+                    "Return to page 1 to rebuild the instance page sequence",
+                    openstack_request_id=exc.request_id,
+                ) from exc
+            raise ApiError(
+                409,
+                "instance_conflict",
+                "Instance temporarily unavailable",
+                "The instance state changed while it was being read",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 429:
+            raise ApiError(
+                429,
+                "instance_rate_limited",
+                "Compute request rate limited",
+                "The compute service temporarily rate limited this request",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        raise ApiError(
+            503,
+            "instance_unavailable",
+            "Compute temporarily unavailable",
+            "The compute service is temporarily unavailable",
+            openstack_request_id=exc.request_id,
+        ) from exc
+
     async def collect_quotas(
         request: Request,
         record: SessionRecord,
@@ -246,7 +408,7 @@ def create_app(
         )
         for result in results:
             if isinstance(result, AdapterError) and result.status_code == 401:
-                await request.app.state.sessions.delete(record.id)
+                await invalidate_session(request, record)
                 raise ApiError(
                     401,
                     "unauthenticated",
@@ -356,7 +518,12 @@ def create_app(
         previous_session_id = request.cookies.get(active_settings.cookie_name)
         await request.app.state.sessions.create(record)
         if previous_session_id:
+            previous = await request.app.state.sessions.get(previous_session_id)
             await request.app.state.sessions.delete(previous_session_id)
+            if previous is not None:
+                await instance_cursors(request).invalidate_namespace(
+                    previous.scope_namespace
+                )
         set_session_cookie(response, record)
         return record.public()
 
@@ -398,6 +565,7 @@ def create_app(
                     "CSRF token is missing or invalid",
                 )
             await request.app.state.sessions.delete(record.id)
+            await instance_cursors(request).invalidate_namespace(record.scope_namespace)
         response.delete_cookie(
             active_settings.cookie_name,
             path="/",
@@ -464,7 +632,7 @@ def create_app(
             )
         except ScopeError as exc:
             if exc.status_code == 401:
-                await request.app.state.sessions.delete(record.id)
+                await invalidate_session(request, record)
                 error = ApiError(
                     401,
                     "unauthenticated",
@@ -513,10 +681,18 @@ def create_app(
                     openstack_request_id=exc.request_id,
                 )
             raise error from exc
+        scope_changed = (
+            record.active_scope is None
+            or record.active_scope.project.id != result.project.id
+            or record.active_scope.region != result.region
+        )
         updated = rotated_session(
             record,
             auth_context=result.auth_context,
             active_scope=Scope(project=result.project, region=result.region),
+            scope_namespace=(
+                new_scope_namespace() if scope_changed else record.scope_namespace
+            ),
             expires_at=min(
                 record.expires_at,
                 result.expires_at or record.expires_at,
@@ -524,6 +700,8 @@ def create_app(
         )
         if not await request.app.state.sessions.rotate(record.id, updated):
             raise ApiError(401, "session_changed", "Authentication required", "Session has changed")
+        if scope_changed:
+            await instance_cursors(request).invalidate_namespace(record.scope_namespace)
         set_session_cookie(response, updated)
         return updated.public()
 
@@ -585,6 +763,164 @@ def create_app(
             partial_errors=errors,
         )
 
+    @app.get("/api/v1/instances", response_model=InstancePage)
+    async def instances(
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        limit: Annotated[int, Query()] = 25,
+        page: Annotated[int, Query(ge=1)] = 1,
+        name: Annotated[str | None, Query(max_length=255)] = None,
+        status: Annotated[str | None, Query(max_length=64)] = None,
+        image_id: Annotated[str | None, Query(max_length=255)] = None,
+        sort: Annotated[InstanceSort, Query()] = InstanceSort.CREATED_AT,
+        direction: Annotated[SortDirection, Query()] = SortDirection.DESC,
+    ) -> InstancePage:
+        if limit not in {10, 25, 50, 100}:
+            raise ApiError(
+                422,
+                "invalid_page_size",
+                "Invalid page size",
+                "Allowed values are 10, 25, 50, and 100",
+            )
+        scope = active_scope(record)
+        normalized_name = normalized_optional_filter(name)
+        normalized_status_value = normalized_optional_filter(status)
+        normalized_status = (
+            normalized_status_value.upper()
+            if normalized_status_value is not None
+            else None
+        )
+        normalized_image_id = normalized_optional_filter(image_id)
+        cursor_key = instance_cursor_key(
+            record,
+            limit=limit,
+            name=normalized_name,
+            status=normalized_status,
+            image_id=normalized_image_id,
+            sort=sort,
+            direction=direction,
+        )
+        cursors = instance_cursors(request)
+        lease = await cursors.acquire(cursor_key, page)
+        if lease is None:
+            raise ApiError(
+                409,
+                "page_cursor_unavailable",
+                "Page not available yet",
+                "Open the preceding instance page before requesting this page",
+            )
+
+        cursor_committed = False
+        try:
+            try:
+                adapter = cast(OpenStackAdapter, request.app.state.adapter)
+                result = await asyncio.wait_for(
+                    adapter.list_instances(
+                        record.auth_context,
+                        scope.project.id,
+                        scope.region,
+                        limit=limit + 1,
+                        marker=lease.marker,
+                        name=normalized_name,
+                        status=normalized_status,
+                        image_id=normalized_image_id,
+                        sort=sort,
+                        direction=direction,
+                    ),
+                    timeout=active_settings.instance_source_timeout_seconds,
+                )
+            except TimeoutError:
+                await raise_instance_error(
+                    request,
+                    record,
+                    AdapterTimeoutError(),
+                    detail=False,
+                    cursor_key=cursor_key,
+                    marker_bound=lease.marker is not None,
+                )
+            except AdapterError as exc:
+                await raise_instance_error(
+                    request,
+                    record,
+                    exc,
+                    detail=False,
+                    cursor_key=cursor_key,
+                    marker_bound=lease.marker is not None,
+                )
+
+            visible_items = list(result.items[:limit])
+            has_next = len(result.items) > limit or result.has_next
+            next_marker = (
+                str(visible_items[-1].id)
+                if has_next and visible_items
+                else None
+            )
+            known_pages = await cursors.complete(lease, next_marker)
+            if known_pages is None:
+                raise ApiError(
+                    409,
+                    "page_cursor_changed",
+                    "Instance pages changed",
+                    "A newer page refresh replaced this response",
+                )
+            cursor_committed = True
+            known_max = max(known_pages)
+            has_next = has_next and page + 1 in known_pages
+            start = (page - 1) * limit
+            if result.openstack_request_id is not None:
+                response.headers["X-OpenStack-Request-ID"] = result.openstack_request_id
+            return InstancePage(
+                items=visible_items,
+                page=PageInfo(
+                    number=page,
+                    size=limit,
+                    item_from=start + 1 if visible_items else 0,
+                    item_to=start + len(visible_items) if visible_items else 0,
+                    total_items=None,
+                    total_pages=None,
+                    has_previous=page > 1,
+                    has_next=has_next,
+                    navigable_pages=_navigable_pages(page, known_max),
+                    openstack_request_id=result.openstack_request_id,
+                ),
+            )
+        finally:
+            if not cursor_committed:
+                await cursors.abandon(lease)
+
+    @app.get("/api/v1/instances/{instance_id}", response_model=InstanceDetail)
+    async def instance_detail(
+        instance_id: uuid.UUID,
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+    ) -> InstanceDetail:
+        scope = active_scope(record)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+        try:
+            result = await asyncio.wait_for(
+                adapter.get_instance(
+                    record.auth_context,
+                    scope.project.id,
+                    scope.region,
+                    str(instance_id),
+                ),
+                timeout=active_settings.instance_source_timeout_seconds,
+            )
+        except TimeoutError:
+            await raise_instance_error(
+                request,
+                record,
+                AdapterTimeoutError(),
+                detail=True,
+            )
+        except AdapterError as exc:
+            await raise_instance_error(request, record, exc, detail=True)
+        if result.openstack_request_id is not None:
+            response.headers["X-OpenStack-Request-ID"] = result.openstack_request_id
+        return result
+
     if (frontend_root / "index.html").is_file():
         app.mount(
             "/assets",
@@ -597,6 +933,8 @@ def create_app(
         @app.get("/projects/select", include_in_schema=False)
         @app.get("/overview", include_in_schema=False)
         @app.get("/quotas", include_in_schema=False)
+        @app.get("/instances", include_in_schema=False)
+        @app.get("/instances/{instance_id}", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")
 

@@ -75,7 +75,11 @@ uv run uvicorn vantage_bff.app:app --app-dir backend
 SDK requests use a 15-second default boundary. Set
 `VANTAGE_OS_TIMEOUT_SECONDS` only when the reference cloud requires a different
 measured value. Quota widgets have a shorter independent boundary controlled by
-`VANTAGE_QUOTA_SOURCE_TIMEOUT_SECONDS`, defaulting to 3 seconds.
+`VANTAGE_QUOTA_SOURCE_TIMEOUT_SECONDS`, defaulting to 3 seconds. Nova instance
+list/detail calls use `VANTAGE_INSTANCE_SOURCE_TIMEOUT_SECONDS`, also defaulting
+to 3 seconds. Blocking OpenStack SDK work is limited by
+`VANTAGE_OPENSTACK_SDK_THREAD_CAPACITY` (default `8`); timed-out work retains
+its slot until the underlying thread exits.
 
 No credential, password, Keystone token, or service endpoint is committed.
 See [ADR 0001](docs/adr/0001-goal1-runtime-foundation.md) for the runtime and

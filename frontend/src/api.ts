@@ -1,4 +1,7 @@
 import type {
+  InstanceDetail,
+  InstancePage,
+  InstanceQuery,
   Problem,
   ProjectOverview,
   ProjectPage,
@@ -98,6 +101,20 @@ export const api = {
     const query = service ? `?${new URLSearchParams({ service })}` : ''
     return request<QuotaPayload>(`/quotas${query}`, { signal })
   },
+  instances: (filters: InstanceQuery, signal?: AbortSignal) => {
+    const query = new URLSearchParams({
+      limit: String(filters.limit),
+      page: String(filters.page),
+      name: filters.name,
+      status: filters.status,
+      image_id: filters.imageId,
+      sort: filters.sort,
+      direction: filters.direction,
+    })
+    return request<InstancePage>(`/instances?${query}`, { signal })
+  },
+  instance: (instanceId: string, signal?: AbortSignal) =>
+    request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),
   logout: async () => {
     await request<void>('/session', { method: 'DELETE' })
     csrfToken = ''

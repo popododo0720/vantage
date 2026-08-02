@@ -136,6 +136,10 @@ selection.
   detail route without unloading the list.
 - Empty means a successful page with zero items. Permission denied and service
   failure are not rendered as empty.
+- Nova may return an `UNKNOWN` partial server record while a cell is
+  temporarily unreachable. Missing name, timestamp, image, Flavor, address, or
+  attachment data renders as unavailable; Vantage does not invent an empty or
+  default value and does not discard the server UUID.
 
 ### Instance Detail
 

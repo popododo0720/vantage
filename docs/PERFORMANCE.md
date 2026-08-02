@@ -24,6 +24,25 @@ use. Visual improvement without measurable latency improvement is not enough.
 - Revalidate on route entry, focus, and task completion.
 - Do not add a manual refresh button.
 
+### Instance inventory invariant
+
+- Each Nova list request sends the selected `limit` plus one look-ahead item;
+  the BFF returns only the selected page size.
+- The adapter issues one Nova `/servers/detail` request and never lets an SDK
+  generator follow pagination links for a browser list request. When an
+  operator-defined Nova `max_limit` clamps the look-ahead request, Vantage
+  honors the response's `servers_links` `rel=next` signal instead of treating
+  the short page as the end of the collection.
+- The last returned server ID becomes the marker for the next visible page.
+  Markers stay in a short-lived scope- and query-bound server map and never
+  enter the browser URL or response body.
+- Nova does not provide a portable total for this list. Vantage does not run a
+  second full-list or count request to manufacture one; numbered controls grow
+  progressively as cursor pages are reached.
+- Blocking SDK calls share a bounded execution capacity. A timed-out or
+  cancelled request keeps its slot until the underlying SDK thread exits, so
+  repeated upstream stalls cannot create an unbounded executor queue.
+
 ## Initial Timeout Budget
 
 | Dependency | Timeout |
@@ -59,6 +78,8 @@ For every profile:
    policy-403, and rate-limited scenarios.
 4. Verify that list requests never download a complete collection and that
    project/region switches never reuse another scope's rows.
+   For Nova inventory, assert one upstream request and at most `limit + 1`
+   decoded resources for every browser page.
 5. Fail the gate when a profile exceeds an SLO; averages across profiles do not
    convert a failing profile into a pass.
 

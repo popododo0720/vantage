@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, NotRequired, TypedDict
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -140,6 +141,42 @@ class QuotaCollection(StrictModel):
     stale: bool = False
     quotas: list[Quota]
     partial_errors: list[WidgetError]
+
+
+class InstanceSort(StrEnum):
+    CREATED_AT = "created_at"
+    NAME = "name"
+    STATUS = "status"
+
+
+class SortDirection(StrEnum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+class Instance(StrictModel):
+    id: UUID
+    status: str
+    name: str | None
+    created_at: datetime | None
+    flavor: str | None
+    image: str | None
+    addresses: list[str] | None
+
+
+class InstanceVolume(StrictModel):
+    id: str
+    device: str | None = None
+
+
+class InstancePage(StrictModel):
+    items: list[Instance]
+    page: PageInfo
+
+
+class InstanceDetail(Instance):
+    volumes: list[InstanceVolume] | None
+    openstack_request_id: str | None
 
 
 class Problem(StrictModel):

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Vantage BFF API
-  version: 0.2.0
-  summary: Implemented session, project-scope, and quota-overview API
+  version: 0.3.0
+  summary: Implemented session, project-scope, quota, and instance inventory API
   description: |
     Browser-facing API implemented by the current Vantage runtime. The browser
     never receives an OpenStack token or calls an OpenStack service endpoint
@@ -21,6 +21,8 @@ tags:
     description: Quota-first project overview with isolated service failures.
   - name: Quotas
     description: Detailed compute, network, and storage quota usage.
+  - name: Instances
+    description: Bounded, project-scoped Nova inventory and instance details.
 paths:
   /session:
     get:
@@ -230,6 +232,98 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+  /instances:
+    get:
+      tags: [Instances]
+      summary: List instances in the active project
+      description: |
+        Uses a server-side Nova marker chain. Vantage fetches at most one
+        requested page plus one look-ahead item and never enumerates the full
+        project collection to synthesize a total.
+      operationId: listInstances
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+        - name: status
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+        - name: image_id
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [created_at, name, status]
+            default: created_at
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: A bounded cursor-backed instance page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstancePage"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+  /instances/{instance_id}:
+    get:
+      tags: [Instances]
+      summary: Get one instance in the active project
+      operationId: getInstance
+      parameters:
+        - $ref: "#/components/parameters/InstanceId"
+      responses:
+        "200":
+          description: Project-scoped instance detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceDetail"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
 components:
   headers:
     CsrfToken:
@@ -273,6 +367,13 @@ components:
         type: integer
         minimum: 1
         default: 1
+    InstanceId:
+      name: instance_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   responses:
     Unauthenticated:
       description: The Vantage session is missing or expired.
@@ -287,13 +388,13 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     NotFound:
-      description: The requested project scope is unavailable.
+      description: The requested resource is unavailable in the active scope.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: The active project scope is missing or could not be established.
+      description: The active scope or requested progressive cursor page is unavailable.
       content:
         application/problem+json:
           schema:
@@ -311,7 +412,13 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     ServiceUnavailable:
-      description: The identity service is temporarily unavailable.
+      description: An OpenStack service is temporarily unavailable.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    GatewayTimeout:
+      description: An OpenStack service did not respond within the bounded deadline.
       content:
         application/problem+json:
           schema:
@@ -479,6 +586,113 @@ components:
             $ref: "#/components/schemas/Project"
         page:
           $ref: "#/components/schemas/PageInfo"
+    Instance:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, created_at, flavor, image, addresses]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+        status:
+          type: string
+        created_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        flavor:
+          anyOf:
+            - type: string
+            - type: "null"
+        image:
+          anyOf:
+            - type: string
+            - type: "null"
+        addresses:
+          anyOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+    InstancePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Instance"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    InstanceVolumeAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, device]
+      properties:
+        id:
+          type: string
+        device:
+          anyOf:
+            - type: string
+            - type: "null"
+    InstanceDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - status
+        - created_at
+        - flavor
+        - image
+        - addresses
+        - volumes
+        - openstack_request_id
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+        status:
+          type: string
+        created_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        flavor:
+          anyOf:
+            - type: string
+            - type: "null"
+        image:
+          anyOf:
+            - type: string
+            - type: "null"
+        addresses:
+          anyOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+        volumes:
+          anyOf:
+            - type: array
+              items:
+                $ref: "#/components/schemas/InstanceVolumeAttachment"
+            - type: "null"
+        openstack_request_id:
+          anyOf:
+            - type: string
+            - type: "null"
     Quota:
       type: object
       additionalProperties: false

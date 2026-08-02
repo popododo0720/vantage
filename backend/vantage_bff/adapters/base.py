@@ -5,12 +5,16 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 
 from vantage_bff.models import (
+    Instance,
+    InstanceDetail,
+    InstanceSort,
     Project,
     Quota,
     QuotaResource,
     QuotaService,
     QuotaState,
     QuotaUnit,
+    SortDirection,
     User,
 )
 
@@ -37,6 +41,10 @@ class ScopeError(AdapterError):
     default_status_code = 409
 
 
+class AdapterTimeoutError(AdapterError):
+    default_status_code = 504
+
+
 @dataclass(frozen=True, slots=True)
 class AuthResult:
     user: User
@@ -52,6 +60,13 @@ class ScopeResult:
     region: str
     auth_context: dict[str, Any]
     expires_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InstanceListResult:
+    items: tuple[Instance, ...]
+    has_next: bool = False
+    openstack_request_id: str | None = None
 
 
 def quota_state(used: int, reserved: int, limit: int | None) -> QuotaState:
@@ -102,3 +117,26 @@ class OpenStackAdapter(Protocol):
         region: str,
         service: QuotaService,
     ) -> tuple[Quota, ...]: ...
+
+    async def list_instances(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        status: str | None,
+        image_id: str | None,
+        sort: InstanceSort,
+        direction: SortDirection,
+    ) -> InstanceListResult: ...
+
+    async def get_instance(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+    ) -> InstanceDetail: ...

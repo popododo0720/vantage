@@ -87,7 +87,7 @@ def test_overview_returns_quota_first_snapshot_without_enumerating_servers() -> 
         "storage",
     }
     assert body["instance_summary"] == {
-        "total": 7,
+        "total": 37,
         "active": None,
         "stopped": None,
         "error": None,
@@ -241,11 +241,13 @@ def test_app_wires_a_separate_quota_sdk_timeout() -> None:
         auth_url="https://keystone.example/v3",
         request_timeout_seconds=15,
         quota_source_timeout_seconds=2.5,
+        instance_source_timeout_seconds=1.5,
     ))
 
     assert isinstance(adapter, OpenStackSdkAdapter)
     assert adapter.request_timeout_seconds == 15
     assert adapter.quota_timeout_seconds == 2.5
+    assert adapter.instance_timeout_seconds == 1.5
 
 
 def test_sdk_resource_normalization_accepts_usage_and_detail_shapes() -> None:
@@ -335,4 +337,4 @@ def test_sdk_uses_detailed_quota_calls(
 
     assert QuotaConnection.calls == [expected]
     assert QuotaConnection.connection_options[0]["api_timeout"] == 2.5
-    assert QuotaConnection.connection_options[0]["app_version"] == "0.2.0"
+    assert QuotaConnection.connection_options[0]["app_version"] == "0.3.0"

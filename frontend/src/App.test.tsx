@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { resetCsrfForTest } from './api'
+import type { InstanceDetail, InstancePage } from './types'
 
 const projects = [{ id: 'project-alpha', name: 'Alpha', enabled: true }]
 
@@ -56,6 +57,84 @@ const quotaPayload = {
   stale: false,
   quotas,
   partial_errors: [],
+}
+
+const server = {
+  id: '11111111-1111-4111-8111-111111111111',
+  name: 'web-01',
+  status: 'ACTIVE',
+  created_at: '2026-08-01T12:00:00Z',
+  flavor: 'm1.small',
+  image: 'ubuntu-24.04',
+  addresses: ['private=10.0.0.10', 'public=203.0.113.10'],
+}
+
+const unknownServer = {
+  id: '22222222-2222-4222-8222-222222222222',
+  name: null,
+  status: 'UNKNOWN',
+  created_at: null,
+  flavor: null,
+  image: null,
+  addresses: null,
+}
+
+const instancePage: InstancePage = {
+  items: [server, unknownServer],
+  page: {
+    number: 1,
+    size: 25,
+    item_from: 1,
+    item_to: 2,
+    total_items: null,
+    total_pages: null,
+    has_previous: false,
+    has_next: true,
+    navigable_pages: [1, 2],
+    openstack_request_id: 'req-list-1',
+  },
+}
+
+const serverDetail: InstanceDetail = {
+  ...server,
+  volumes: [{ id: 'volume-01', device: '/dev/vdb' }, { id: 'volume-02', device: null }],
+  openstack_request_id: 'req-detail-1',
+}
+
+function scopedFetch({
+  list = instancePage,
+  detail = serverDetail,
+}: {
+  list?: InstancePage
+  detail?: InstanceDetail
+} = {}) {
+  return vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input)
+    const method = init?.method ?? 'GET'
+    if (url === '/api/v1/session' && method === 'GET') return Promise.resolve(json(scopedSession))
+    if (url === '/api/v1/session' && method === 'PATCH') {
+      return Promise.resolve(json({ ...scopedSession, locale: 'ko' }))
+    }
+    if (url.startsWith('/api/v1/instances?')) {
+      const parameters = new URL(url, 'http://local').searchParams
+      const page = Number(parameters.get('page'))
+      const size = Number(parameters.get('limit'))
+      return Promise.resolve(json({
+        ...list,
+        page: {
+          ...list.page,
+          number: page,
+          size,
+          item_from: (page - 1) * size + 1,
+          item_to: (page - 1) * size + list.items.length,
+          has_previous: page > 1,
+          has_next: list.page.total_pages === null ? page < 2 : page < list.page.total_pages,
+        },
+      }))
+    }
+    if (url.startsWith('/api/v1/instances/')) return Promise.resolve(json(detail))
+    throw new Error(`Unexpected request: ${method} ${url}`)
+  })
 }
 
 function json(body: unknown, init: ResponseInit = {}): Response {
@@ -442,5 +521,499 @@ describe('session and scope flow', () => {
     act(() => intervalHandler?.())
     window.dispatchEvent(new Event('focus'))
     expect(fetchMock).toHaveBeenCalledTimes(callsBeforeUnmount)
+  })
+
+  it('debounces instance text filters and uses bounded server-side pages', async () => {
+    window.history.replaceState({}, '', '/instances?page=10')
+    const list = {
+      ...instancePage,
+      page: { ...instancePage.page, navigable_pages: Array.from({ length: 20 }, (_, index) => index + 1) },
+    }
+    const fetchMock = scopedFetch({ list })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByRole('table', { name: 'Instances' })
+
+    const instanceRequests = () => fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/v1/instances?'))
+    expect(instanceRequests()).toEqual([
+      '/api/v1/instances?limit=25&page=10&name=&status=&image_id=&sort=created_at&direction=desc',
+    ])
+    expect(screen.getByRole('button', { name: 'Page 10' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByRole('button', { name: 'Page 5' })).not.toBeInTheDocument()
+    expect(screen.getAllByText('...')).toHaveLength(2)
+    expect(document.querySelector('.page-range')).toHaveTextContent('226-227')
+    expect(document.querySelector('.page-range')).not.toHaveTextContent('?')
+
+    const name = screen.getByLabelText('Filter by name')
+    const image = screen.getByLabelText('Filter by image ID')
+    fireEvent.change(name, { target: { value: 'w' } })
+    fireEvent.change(name, { target: { value: 'web' } })
+    fireEvent.change(image, { target: { value: 'image-1' } })
+    expect(instanceRequests()).toHaveLength(1)
+
+    await waitFor(() => expect(instanceRequests()).toHaveLength(2), { timeout: 1_500 })
+    expect(instanceRequests().at(-1)).toBe(
+      '/api/v1/instances?limit=25&page=1&name=web&status=&image_id=image-1&sort=created_at&direction=desc',
+    )
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/instances?name=web&image_id=image-1')
+
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'ACTIVE' } })
+    await waitFor(() => expect(instanceRequests()).toHaveLength(3))
+    expect(instanceRequests().at(-1)).toContain('page=1&name=web&status=ACTIVE&image_id=image-1')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Page 2' }))
+    await waitFor(() => expect(instanceRequests()).toHaveLength(4))
+    expect(instanceRequests().at(-1)).toContain('limit=25&page=2&name=web&status=ACTIVE')
+
+    const rows = screen.getByLabelText('Rows per page')
+    expect(within(rows).getAllByRole('option').map((option) => option.textContent))
+      .toEqual(['10', '25', '50', '100'])
+    fireEvent.change(rows, { target: { value: '100' } })
+    await waitFor(() => expect(instanceRequests()).toHaveLength(5))
+    expect(instanceRequests().at(-1)).toContain('limit=100&page=1&name=web&status=ACTIVE')
+    expect(screen.queryByText('Prev')).not.toBeInTheDocument()
+    expect(screen.queryByText('Next')).not.toBeInTheDocument()
+  })
+
+  it.each(['page_cursor_unavailable', 'page_cursor_changed'] as const)(
+    'recovers a direct page route from %s without losing its query',
+    async (code) => {
+      const route = '/instances?limit=50&page=3&name=web&status=ACTIVE&image_id=image-1&sort=name&direction=asc'
+      window.history.replaceState({}, '', route)
+      const requests: string[] = []
+      const fetchMock = vi.fn((input: string | URL | Request) => {
+        const url = String(input)
+        if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+        if (url.startsWith('/api/v1/instances?')) {
+          requests.push(url)
+          if (requests.length === 1) {
+            return Promise.resolve(json({
+              detail: 'Raw cursor detail must not be shown',
+              code,
+              trace_id: `trace-${code}`,
+            }, { status: 409 }))
+          }
+          return Promise.resolve(json({
+            ...instancePage,
+            page: { ...instancePage.page, size: 50, has_next: false, navigable_pages: [1] },
+          }))
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      render(<App />)
+
+      expect(await screen.findByRole('table', { name: 'Instances' })).toBeInTheDocument()
+      expect(requests).toEqual([
+        '/api/v1/instances?limit=50&page=3&name=web&status=ACTIVE&image_id=image-1&sort=name&direction=asc',
+        '/api/v1/instances?limit=50&page=1&name=web&status=ACTIVE&image_id=image-1&sort=name&direction=asc',
+      ])
+      expect(`${window.location.pathname}${window.location.search}`).toBe(
+        '/instances?limit=50&name=web&status=ACTIVE&image_id=image-1&sort=name&direction=asc',
+      )
+      expect(screen.queryByText('Raw cursor detail must not be shown')).not.toBeInTheDocument()
+    },
+  )
+
+  it.each([
+    [403, 'instances_forbidden', 'You do not have permission to view instances in this project.'],
+    [404, 'instances_not_found', 'The instance list is unavailable for this project.'],
+  ] as const)(
+    'clears a previously loaded instance list after a %s response',
+    async (status, code, expectedMessage) => {
+      window.history.replaceState({}, '', '/instances')
+      let listCalls = 0
+      const fetchMock = vi.fn((input: string | URL | Request) => {
+        const url = String(input)
+        if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+        if (url.startsWith('/api/v1/instances?')) {
+          listCalls += 1
+          if (listCalls === 1) return Promise.resolve(json(instancePage))
+          return Promise.resolve(json({
+            detail: 'Raw backend list detail must not be shown',
+            code,
+            trace_id: `trace-list-${status}`,
+            openstack_request_id: `req-list-${status}`,
+          }, { status }))
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      render(<App />)
+      expect(await screen.findByText('web-01')).toBeInTheDocument()
+
+      act(() => window.dispatchEvent(new Event('focus')))
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent(expectedMessage)
+      expect(alert).toHaveTextContent(`OpenStack req-list-${status}`)
+      expect(alert).toHaveTextContent(`Vantage trace-list-${status}`)
+      expect(screen.queryByText('Raw backend list detail must not be shown')).not.toBeInTheDocument()
+      expect(screen.queryByRole('table', { name: 'Instances' })).not.toBeInTheDocument()
+      expect(screen.queryByText('web-01')).not.toBeInTheDocument()
+      expect(screen.queryByText('req-list-1')).not.toBeInTheDocument()
+    },
+  )
+
+  it.each([
+    ['active_scope_required', 409, 'Select a project and region before viewing instances.'],
+    ['invalid_request', 422, 'The instance request is invalid.'],
+    ['invalid_page_size', 422, 'The selected page size is not supported.'],
+    ['invalid_instance_filter', 422, 'One or more instance filters are invalid.'],
+    ['instance_rate_limited', 429, 'Instance data is temporarily rate limited. Try again shortly.'],
+    ['instance_unavailable', 503, 'The compute service is temporarily unavailable.'],
+    ['instance_timeout', 504, 'The compute service did not respond in time.'],
+  ] as const)(
+    'maps the expected %s problem to localized copy and preserves references',
+    async (code, status, expectedMessage) => {
+      window.history.replaceState({}, '', '/instances')
+      vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+        const url = String(input)
+        if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+        if (url.startsWith('/api/v1/instances?')) {
+          return Promise.resolve(json({
+            detail: 'Raw backend problem detail must not be shown',
+            code,
+            trace_id: `trace-${code}`,
+            openstack_request_id: `req-${code}`,
+          }, { status }))
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      }))
+
+      render(<App />)
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent(expectedMessage)
+      expect(alert).toHaveTextContent(`OpenStack req-${code}`)
+      expect(alert).toHaveTextContent(`Vantage trace-${code}`)
+      expect(screen.queryByText('Raw backend problem detail must not be shown')).not.toBeInTheDocument()
+    },
+  )
+
+  it('opens a routed instance drawer with live network and storage data', async () => {
+    window.history.replaceState({}, '', '/instances?page=2&status=ACTIVE')
+    const fetchMock = scopedFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    const opener = await screen.findByRole('button', { name: 'Open instance details: web-01' })
+    vi.spyOn(window, 'scrollX', 'get').mockReturnValue(23)
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(517)
+    const scrollToMock = vi.mocked(window.scrollTo)
+    scrollToMock.mockClear()
+    fireEvent.click(opener)
+
+    let dialog = await screen.findByRole('dialog', { name: 'web-01' })
+    expect(scrollToMock).not.toHaveBeenCalled()
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(`${window.location.pathname}${window.location.search}`).toBe(
+      `/instances/${server.id}?page=2&status=ACTIVE`,
+    )
+    const tabs = within(dialog).getAllByRole('tab')
+    expect(tabs.map((tab) => tab.textContent))
+      .toEqual(['Overview', 'Network', 'Storage'])
+    expect(within(dialog).getAllByRole('tabpanel', { hidden: true })).toHaveLength(3)
+    for (const tab of tabs) {
+      expect(document.getElementById(tab.getAttribute('aria-controls')!)).toBeInTheDocument()
+    }
+    const [overviewTab, networkTab, storageTab] = tabs
+    expect(overviewTab).toHaveAttribute('tabindex', '0')
+    expect(networkTab).toHaveAttribute('tabindex', '-1')
+    expect(storageTab).toHaveAttribute('tabindex', '-1')
+
+    overviewTab.focus()
+    fireEvent.keyDown(overviewTab, { key: 'ArrowLeft' })
+    expect(storageTab).toHaveFocus()
+    expect(storageTab).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(storageTab, { key: 'Home' })
+    expect(overviewTab).toHaveFocus()
+    fireEvent.keyDown(overviewTab, { key: 'End' })
+    expect(storageTab).toHaveFocus()
+    fireEvent.keyDown(storageTab, { key: 'ArrowRight' })
+    expect(overviewTab).toHaveFocus()
+    fireEvent.keyDown(overviewTab, { key: 'ArrowRight' })
+    expect(networkTab).toHaveFocus()
+    fireEvent.keyDown(networkTab, { key: 'ArrowLeft' })
+    expect(overviewTab).toHaveFocus()
+    expect(within(dialog).queryByText('Events')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('Rows per page')).not.toBeInTheDocument()
+
+    fireEvent.click(networkTab)
+    expect(within(dialog).getByRole('tabpanel')).toHaveTextContent('private=10.0.0.10')
+    fireEvent.click(storageTab)
+    expect(within(dialog).getByRole('tabpanel')).toHaveTextContent('volume-01')
+    expect(within(dialog).getByRole('tabpanel')).toHaveTextContent('/dev/vdb')
+    expect(within(dialog).getByRole('tabpanel')).toHaveTextContent('volume-02')
+    expect(within(dialog).getByRole('tabpanel')).toHaveTextContent('Not available')
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/instances?page=2&status=ACTIVE')
+    await waitFor(() => expect(opener).toHaveFocus())
+    expect(scrollToMock).toHaveBeenLastCalledWith({ left: 23, top: 517 })
+    expect(document.body.style.overflow).toBe('')
+
+    fireEvent.click(opener)
+    await screen.findByRole('dialog', { name: 'web-01' })
+    act(() => window.history.back())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    fireEvent.click(opener)
+    dialog = await screen.findByRole('dialog', { name: 'web-01' })
+    fireEvent.mouseDown(dialog.parentElement!)
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it.each([
+    [403, 'instance_forbidden', '이 인스턴스를 볼 권한이 없습니다.'],
+    [404, 'instance_not_found', '활성 프로젝트에 이 인스턴스가 더 이상 존재하지 않습니다.'],
+  ] as const)(
+    'clears previously loaded instance details after a %s response',
+    async (status, code, expectedMessage) => {
+      window.history.replaceState({}, '', '/instances')
+      let detailCalls = 0
+      const fetchMock = vi.fn((input: string | URL | Request) => {
+        const url = String(input)
+        if (url === '/api/v1/session') {
+          return Promise.resolve(json({ ...scopedSession, locale: 'ko' }))
+        }
+        if (url.startsWith('/api/v1/instances?')) return Promise.resolve(json(instancePage))
+        if (url.startsWith('/api/v1/instances/')) {
+          detailCalls += 1
+          if (detailCalls === 1) return Promise.resolve(json(serverDetail))
+          return Promise.resolve(json({
+            detail: 'Raw backend detail must not be shown',
+            code,
+            trace_id: `trace-detail-${status}`,
+            openstack_request_id: `req-detail-${status}`,
+          }, { status }))
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      render(<App />)
+      const opener = await screen.findByRole('button', { name: '인스턴스 상세 열기: web-01' })
+      fireEvent.click(opener)
+      const dialog = await screen.findByRole('dialog', { name: 'web-01' })
+      expect(within(dialog).getByText('m1.small')).toBeInTheDocument()
+
+      act(() => window.dispatchEvent(new Event('focus')))
+
+      const alert = await within(dialog).findByRole('alert')
+      expect(alert).toHaveTextContent(expectedMessage)
+      expect(alert).toHaveTextContent(`OpenStack req-detail-${status}`)
+      expect(alert).toHaveTextContent(`Vantage trace-detail-${status}`)
+      expect(within(dialog).queryByText('Raw backend detail must not be shown')).not.toBeInTheDocument()
+      expect(within(dialog).queryByText('web-01')).not.toBeInTheDocument()
+      expect(within(dialog).queryByText('m1.small')).not.toBeInTheDocument()
+      expect(within(dialog).queryByRole('tab')).not.toBeInTheDocument()
+      expect(dialog).toHaveAccessibleName('인스턴스 상세')
+    },
+  )
+
+  it('handles direct detail URLs and distinguishes unavailable from empty values', async () => {
+    const unknownDetail: InstanceDetail = { ...unknownServer, volumes: null }
+    const emptyAddressServer = {
+      ...server,
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'empty-addresses',
+      addresses: [],
+    }
+    const list: InstancePage = {
+      items: [unknownServer, emptyAddressServer],
+      page: { ...instancePage.page, has_next: false, navigable_pages: [1] },
+    }
+    window.history.replaceState({}, '', `/instances/${unknownServer.id}?name=unknown`)
+    vi.stubGlobal('fetch', scopedFetch({ list, detail: unknownDetail }))
+
+    render(<App />)
+    const dialog = await screen.findByRole('dialog', { name: unknownServer.id })
+    expect(await screen.findByRole('button', {
+      name: `Open instance details: ${unknownServer.id}`,
+    })).toBeInTheDocument()
+    expect(screen.getByText('No addresses')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Network' }))
+    let panel = within(dialog).getByRole('tabpanel')
+    expect(panel).toHaveTextContent('Not available')
+    expect(panel).not.toHaveTextContent('No addresses')
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Storage' }))
+    panel = within(dialog).getByRole('tabpanel')
+    expect(panel).toHaveTextContent('Not available')
+    expect(panel).not.toHaveTextContent('No attached volumes')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close instance details' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/instances?name=unknown')
+  })
+
+  it('localizes the instance route without losing filters or refetching the list', async () => {
+    const route = '/instances?limit=50&page=2&status=ACTIVE&sort=name&direction=asc'
+    window.history.replaceState({}, '', route)
+    const fetchMock = scopedFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Instances', level: 1 })
+    const requestsBefore = fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/instances?')).length
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ko' } })
+
+    expect(await screen.findByRole('heading', { name: '인스턴스', level: 1 })).toBeInTheDocument()
+    expect(screen.getByLabelText('이름으로 필터')).toBeInTheDocument()
+    expect(screen.getByLabelText('페이지당 행')).toHaveValue('50')
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/session', expect.objectContaining({ method: 'PATCH' })))
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/instances?'))).toHaveLength(requestsBefore)
+  })
+
+  it('aborts a superseded Nova list request after the debounced query changes', async () => {
+    window.history.replaceState({}, '', '/instances')
+    let firstSignal: AbortSignal | undefined
+    let listCalls = 0
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/instances?')) {
+        listCalls += 1
+        if (listCalls === 1) {
+          firstSignal = init?.signal ?? undefined
+          return new Promise<Response>((_resolve, reject) => {
+            firstSignal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'))
+            }, { once: true })
+          })
+        }
+        return Promise.resolve(json(instancePage))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    const name = await screen.findByLabelText('Filter by name')
+    fireEvent.change(name, { target: { value: 'a' } })
+    fireEvent.change(name, { target: { value: 'api' } })
+
+    await waitFor(() => expect(listCalls).toBe(2), { timeout: 1_500 })
+    expect(firstSignal?.aborted).toBe(true)
+    expect(await screen.findByRole('table', { name: 'Instances' })).toBeInTheDocument()
+    const lastUrl = String(fetchMock.mock.calls.at(-1)?.[0])
+    expect(lastUrl).toContain('page=1&name=api&status=&image_id=')
+  })
+
+  it('reauthenticates on an instance-list 401 while preserving the route', async () => {
+    const route = '/instances?status=ACTIVE'
+    window.history.replaceState({}, '', route)
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/instances?')) {
+        return Promise.resolve(json({
+          detail: 'Session missing or expired',
+          code: 'unauthenticated',
+          trace_id: 'trace-instances-expired',
+        }, { status: 401 }))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    expect(await screen.findByRole('dialog', { name: 'Session expired' })).toBeInTheDocument()
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+    expect(screen.queryByRole('table', { name: 'Instances' })).not.toBeInTheDocument()
+  })
+
+  it('drops prior-project rows and recovers a missing cursor after a project switch', async () => {
+    window.history.replaceState({}, '', '/instances?limit=50&page=2&status=ACTIVE&sort=name&direction=asc')
+    const betaProject = { id: 'project-beta', name: 'Beta', enabled: true }
+    const betaSession = {
+      ...scopedSession,
+      active_scope: { project: betaProject, region: 'RegionOne' },
+    }
+    const betaServer = {
+      ...server,
+      id: '44444444-4444-4444-8444-444444444444',
+      name: 'db-beta',
+    }
+    const betaPage: InstancePage = {
+      items: [betaServer],
+      page: { ...instancePage.page, size: 50, item_to: 1, has_next: false, navigable_pages: [1] },
+    }
+    const projectsWithBeta = {
+      items: [projects[0], betaProject],
+      page: { ...projectPage.page, item_to: 2, total_items: 2 },
+    }
+    let currentProject = 'project-alpha'
+    const betaRequests: string[] = []
+    let resolveBeta: (response: Response) => void = () => undefined
+    const pendingBeta = new Promise<Response>((resolve) => { resolveBeta = resolve })
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/instances?')) {
+        if (currentProject === 'project-alpha') {
+          return Promise.resolve(json({
+            ...instancePage,
+            page: {
+              ...instancePage.page,
+              number: 2,
+              size: 50,
+              item_from: 51,
+              item_to: 52,
+              has_previous: true,
+            },
+          }))
+        }
+        betaRequests.push(url)
+        if (betaRequests.length === 1) {
+          return Promise.resolve(json({
+            detail: 'Open page 1 first',
+            code: 'page_cursor_unavailable',
+            trace_id: 'trace-beta-cursor',
+          }, { status: 409 }))
+        }
+        return pendingBeta
+      }
+      if (url.startsWith('/api/v1/instances/')) return Promise.resolve(json(serverDetail))
+      if (url.startsWith('/api/v1/projects?')) return Promise.resolve(json(projectsWithBeta))
+      if (url === '/api/v1/scope' && init?.method === 'PUT') {
+        currentProject = 'project-beta'
+        return Promise.resolve(json(betaSession))
+      }
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    const opener = await screen.findByRole('button', { name: 'Open instance details: web-01' })
+    fireEvent.click(opener)
+    await screen.findByRole('dialog', { name: 'web-01' })
+    expect(window.location.pathname).toBe(`/instances/${server.id}`)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch project: Alpha, RegionOne' }))
+    const beta = await screen.findByRole('radio', { name: /Beta/ })
+    fireEvent.click(beta)
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to project' }))
+
+    expect(await screen.findByText('Loading instances...')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByText('web-01')).not.toBeInTheDocument()
+    resolveBeta(json(betaPage))
+    expect(await screen.findByText('db-beta')).toBeInTheDocument()
+    expect(screen.queryByText('web-01')).not.toBeInTheDocument()
+    expect(betaRequests).toEqual([
+      '/api/v1/instances?limit=50&page=2&name=&status=ACTIVE&image_id=&sort=name&direction=asc',
+      '/api/v1/instances?limit=50&page=1&name=&status=ACTIVE&image_id=&sort=name&direction=asc',
+    ])
+    expect(`${window.location.pathname}${window.location.search}`).toBe(
+      '/instances?limit=50&status=ACTIVE&sort=name&direction=asc',
+    )
   })
 })

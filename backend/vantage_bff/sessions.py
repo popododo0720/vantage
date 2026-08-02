@@ -13,6 +13,7 @@ from vantage_bff.models import Project, Scope, SessionResponse, User
 class SessionRecord:
     id: str
     csrf_token: str
+    scope_namespace: str
     user: User
     projects: tuple[Project, ...]
     regions: tuple[str, ...]
@@ -75,6 +76,7 @@ def new_session(
     return SessionRecord(
         id=secrets.token_urlsafe(32),
         csrf_token=secrets.token_urlsafe(32),
+        scope_namespace=new_scope_namespace(),
         user=user,
         projects=projects,
         regions=regions,
@@ -90,3 +92,7 @@ def rotated_session(record: SessionRecord, **changes: Any) -> SessionRecord:
         csrf_token=secrets.token_urlsafe(32),
         **changes,
     )
+
+
+def new_scope_namespace() -> str:
+    return secrets.token_urlsafe(24)
