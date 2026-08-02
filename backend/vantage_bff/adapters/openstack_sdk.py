@@ -12,19 +12,27 @@ from vantage_bff.adapters.base import (
     AuthenticationError,
     AuthResult,
     InstanceListResult,
+    ProvisioningListResult,
     ScopeError,
     ScopeResult,
     normalized_quota,
 )
 from vantage_bff.models import (
+    Flavor,
+    Image,
+    ImageVisibility,
     Instance,
     InstanceDetail,
     InstanceSort,
     InstanceVolume,
+    KeyPair,
+    KeyPairType,
+    Network,
     Project,
     Quota,
     QuotaService,
     QuotaUnit,
+    SecurityGroup,
     SortDirection,
     User,
 )
@@ -35,9 +43,7 @@ _QUOTA_SPECS: dict[QuotaService, tuple[tuple[str, tuple[str, ...], QuotaUnit], .
         ("cores", ("cores",), QuotaUnit.COUNT),
         ("ram_mib", ("ram", "ram_mib"), QuotaUnit.MIB),
     ),
-    QuotaService.NETWORK: (
-        ("floating_ips", ("floating_ips", "floatingip"), QuotaUnit.COUNT),
-    ),
+    QuotaService.NETWORK: (("floating_ips", ("floating_ips", "floatingip"), QuotaUnit.COUNT),),
     QuotaService.STORAGE: (
         ("volumes", ("volumes",), QuotaUnit.COUNT),
         ("gigabytes", ("gigabytes",), QuotaUnit.GIB),
@@ -95,6 +101,7 @@ class OpenStackSdkAdapter:
         request_timeout_seconds: int,
         quota_timeout_seconds: float | None = None,
         instance_timeout_seconds: float | None = None,
+        provisioning_timeout_seconds: float | None = None,
         thread_capacity: int = 8,
     ) -> None:
         self.auth_url = auth_url
@@ -103,6 +110,9 @@ class OpenStackSdkAdapter:
         self.request_timeout_seconds = request_timeout_seconds
         self.quota_timeout_seconds = quota_timeout_seconds or float(request_timeout_seconds)
         self.instance_timeout_seconds = instance_timeout_seconds or float(request_timeout_seconds)
+        self.provisioning_timeout_seconds = (
+            provisioning_timeout_seconds or float(request_timeout_seconds)
+        )
         self._sdk_threads = _BoundedToThreadRunner(thread_capacity)
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
@@ -171,9 +181,7 @@ class OpenStackSdkAdapter:
         region: str,
         service: QuotaService,
     ) -> tuple[Quota, ...]:
-        return await self._sdk_threads.run(
-            self._quotas, auth_context, project_id, region, service
-        )
+        return await self._sdk_threads.run(self._quotas, auth_context, project_id, region, service)
 
     async def list_instances(
         self,
@@ -218,9 +226,107 @@ class OpenStackSdkAdapter:
             instance_id,
         )
 
-    def _scope(
-        self, auth_context: dict[str, Any], project_id: str, region: str
-    ) -> ScopeResult:
+    async def list_images(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        visibility: ImageVisibility | None,
+    ) -> ProvisioningListResult:
+        return await self._sdk_threads.run(
+            self._list_images,
+            auth_context,
+            project_id,
+            region,
+            limit=limit,
+            marker=marker,
+            name=name,
+            visibility=visibility,
+        )
+
+    async def list_flavors(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        return await self._sdk_threads.run(
+            self._list_flavors,
+            auth_context,
+            project_id,
+            region,
+            limit=limit,
+            marker=marker,
+        )
+
+    async def list_keypairs(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        return await self._sdk_threads.run(
+            self._list_keypairs,
+            auth_context,
+            project_id,
+            region,
+            limit=limit,
+            marker=marker,
+        )
+
+    async def list_networks(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        status: str | None,
+    ) -> ProvisioningListResult:
+        return await self._sdk_threads.run(
+            self._list_networks,
+            auth_context,
+            project_id,
+            region,
+            limit=limit,
+            marker=marker,
+            name=name,
+            status=status,
+        )
+
+    async def list_security_groups(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+    ) -> ProvisioningListResult:
+        return await self._sdk_threads.run(
+            self._list_security_groups,
+            auth_context,
+            project_id,
+            region,
+            limit=limit,
+            marker=marker,
+            name=name,
+        )
+
+    def _scope(self, auth_context: dict[str, Any], project_id: str, region: str) -> ScopeResult:
         try:
             from openstack.connection import Connection
 
@@ -288,17 +394,11 @@ class OpenStackSdkAdapter:
                 app_version=_APP_VERSION,
             )
             if service is QuotaService.COMPUTE:
-                resource = cast(Any, connection.compute).get_quota_set(
-                    project_id, usage=True
-                )
+                resource = cast(Any, connection.compute).get_quota_set(project_id, usage=True)
             elif service is QuotaService.NETWORK:
-                resource = cast(Any, connection.network).get_quota(
-                    project_id, details=True
-                )
+                resource = cast(Any, connection.network).get_quota(project_id, details=True)
             else:
-                resource = cast(Any, connection.block_storage).get_quota_set(
-                    project_id, usage=True
-                )
+                resource = cast(Any, connection.block_storage).get_quota_set(project_id, usage=True)
             return _normalize_quota_resource(service, resource)
         except Exception as exc:
             raise _quota_failure(exc) from exc
@@ -397,12 +497,201 @@ class OpenStackSdkAdapter:
         except Exception as exc:
             raise _instance_failure(exc) from exc
 
+    def _list_images(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        visibility: ImageVisibility | None,
+    ) -> ProvisioningListResult:
+        from openstack.image.v2.image import Image as SdkImage
+
+        query = _list_query(limit, marker, name)
+        if visibility is not None:
+            query["visibility"] = visibility.value
+        return self._list_provisioning_resource(
+            auth_context,
+            project_id,
+            region,
+            service="image",
+            resource_class=SdkImage,
+            base_path="/images",
+            collection_key="images",
+            query=query,
+            normalizer=_normalize_image,
+        )
+
+    def _list_flavors(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        from openstack.compute.v2.flavor import Flavor as SdkFlavor
+
+        return self._list_provisioning_resource(
+            auth_context,
+            project_id,
+            region,
+            service="compute",
+            resource_class=SdkFlavor,
+            base_path="/flavors/detail",
+            collection_key="flavors",
+            query=_list_query(limit, marker, None),
+            normalizer=_normalize_flavor,
+        )
+
+    def _list_keypairs(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        from openstack.compute.v2.keypair import Keypair as SdkKeyPair
+
+        return self._list_provisioning_resource(
+            auth_context,
+            project_id,
+            region,
+            service="compute",
+            resource_class=SdkKeyPair,
+            base_path="/os-keypairs",
+            collection_key="keypairs",
+            query=_list_query(limit, marker, None),
+            normalizer=_normalize_keypair,
+            required_microversion="2.35",
+        )
+
+    def _list_networks(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        status: str | None,
+    ) -> ProvisioningListResult:
+        from openstack.network.v2.network import Network as SdkNetwork
+
+        query = _list_query(limit, marker, name)
+        if status is not None:
+            query["status"] = status
+        return self._list_provisioning_resource(
+            auth_context,
+            project_id,
+            region,
+            service="network",
+            resource_class=SdkNetwork,
+            base_path="/networks",
+            collection_key="networks",
+            query=query,
+            normalizer=_normalize_network,
+        )
+
+    def _list_security_groups(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+    ) -> ProvisioningListResult:
+        from openstack.network.v2.security_group import SecurityGroup as SdkSecurityGroup
+
+        return self._list_provisioning_resource(
+            auth_context,
+            project_id,
+            region,
+            service="network",
+            resource_class=SdkSecurityGroup,
+            base_path="/security-groups",
+            collection_key="security_groups",
+            query=_list_query(limit, marker, name),
+            normalizer=_normalize_security_group,
+        )
+
+    def _list_provisioning_resource(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        service: str,
+        resource_class: Any,
+        base_path: str,
+        collection_key: str,
+        query: dict[str, Any],
+        normalizer: Callable[[Any], Image | Flavor | KeyPair | Network | SecurityGroup],
+        required_microversion: str | None = None,
+    ) -> ProvisioningListResult:
+        correlation_id = _global_request_id()
+        try:
+            from openstack import exceptions
+
+            connection = self._project_connection(
+                auth_context,
+                project_id,
+                region,
+                correlation_id,
+                request_timeout_seconds=self.provisioning_timeout_seconds,
+            )
+            session = cast(Any, getattr(connection, service))
+            if required_microversion is not None:
+                from openstack import utils
+
+                microversion = utils.pick_microversion(session, required_microversion)
+            else:
+                microversion = resource_class._get_microversion(session)
+            api_filters = resource_class._query_mapping._validate(
+                query, base_path=base_path, allow_unknown_params=True
+            )
+            query_params = resource_class._query_mapping._transpose(api_filters, resource_class)
+            # Preserve explicitly supported filters missing from an SDK mapping.
+            for name, value in query.items():
+                query_params.setdefault(name, value)
+            response = session.get(
+                base_path,
+                headers={"Accept": "application/json"},
+                params=query_params,
+                microversion=microversion,
+            )
+            exceptions.raise_from_response(response)
+            data = response.json()
+            if not isinstance(data, Mapping):
+                raise ValueError(f"{collection_key} list response must be an object")
+            resources = data.get(collection_key)
+            if not isinstance(resources, list):
+                raise ValueError(f"{collection_key} list response must contain a list")
+            return ProvisioningListResult(
+                items=tuple(normalizer(resource) for resource in resources),
+                has_next=_has_next_collection_link(response, data, collection_key),
+                openstack_request_id=_response_request_id(response) or correlation_id,
+            )
+        except Exception as exc:
+            raise _provisioning_failure(exc) from exc
+
     def _project_connection(
         self,
         auth_context: dict[str, Any],
         project_id: str,
         region: str,
         correlation_id: str,
+        *,
+        request_timeout_seconds: float | None = None,
     ) -> Any:
         from openstack.connection import Connection
 
@@ -421,7 +710,7 @@ class OpenStackSdkAdapter:
             project_id=project_id,
             region_name=region,
             interface=self.interface,
-            api_timeout=self.instance_timeout_seconds,
+            api_timeout=request_timeout_seconds or self.instance_timeout_seconds,
             app_name="vantage",
             app_version=_APP_VERSION,
             global_request_id=correlation_id,
@@ -452,6 +741,47 @@ def _has_next_server_link(response: Any, data: Mapping[str, Any]) -> bool:
         isinstance(next_link.get(key), str) and bool(next_link[key])
         for key in ("url", "uri", "href")
     )
+
+
+def _list_query(limit: int, marker: str | None, name: str | None) -> dict[str, Any]:
+    query: dict[str, Any] = {"limit": limit}
+    if marker is not None:
+        query["marker"] = marker
+    if name is not None:
+        query["name"] = name
+    return query
+
+
+def _has_next_collection_link(response: Any, data: Mapping[str, Any], collection_key: str) -> bool:
+    for key in ("next", f"{collection_key}_links", "links"):
+        links = data.get(key)
+        if isinstance(links, str) and links:
+            return True
+        if isinstance(links, Mapping):
+            candidate = links.get("next")
+            if isinstance(candidate, str) and candidate:
+                return True
+        if isinstance(links, list):
+            for link in links:
+                if (
+                    isinstance(link, Mapping)
+                    and link.get("rel") == "next"
+                    and isinstance(link.get("href"), str)
+                    and link["href"]
+                ):
+                    return True
+    return _has_next_server_link(response, {})
+
+
+def _response_request_id(response: Any) -> str | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    for name in ("x-openstack-request-id", "X-OpenStack-Request-ID"):
+        value = headers.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _global_request_id() -> str:
@@ -584,6 +914,123 @@ def _normalize_instance_detail(resource: Any, request_id: str) -> InstanceDetail
     )
 
 
+def _optional_int(value: Any, *names: str) -> int | None:
+    present, raw = _source_value(value, *names)
+    if not present or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _optional_bool(value: Any, *names: str) -> bool | None:
+    present, raw = _source_value(value, *names)
+    return raw if present and isinstance(raw, bool) else None
+
+
+def _normalize_image(resource: Any) -> Image:
+    visibility_value = _optional_text(resource, "visibility")
+    try:
+        visibility = ImageVisibility(visibility_value) if visibility_value else None
+    except ValueError:
+        visibility = None
+    return Image(
+        id=UUID(_required_text(resource, "id")),
+        name=_optional_text(resource, "name"),
+        status=_optional_text(resource, "status"),
+        visibility=visibility,
+        disk_format=_optional_text(resource, "disk_format"),
+        container_format=_optional_text(resource, "container_format"),
+        size_bytes=_optional_int(resource, "size", "size_bytes"),
+        min_disk_gib=_optional_int(resource, "min_disk", "min_disk_gib"),
+        min_ram_mib=_optional_int(resource, "min_ram", "min_ram_mib"),
+        created_at=_created_at(resource),
+    )
+
+
+def _normalize_flavor(resource: Any) -> Flavor:
+    return Flavor(
+        id=_required_text(resource, "id"),
+        name=_optional_text(resource, "name"),
+        vcpus=_optional_int(resource, "vcpus"),
+        ram_mib=_optional_int(resource, "ram", "ram_mib"),
+        disk_gib=_optional_int(resource, "disk", "disk_gib"),
+        ephemeral_gib=_optional_int(resource, "OS-FLV-EXT-DATA:ephemeral", "ephemeral"),
+        is_public=_optional_bool(resource, "os-flavor-access:is_public", "is_public"),
+    )
+
+
+def _normalize_keypair(resource: Any) -> KeyPair:
+    values = _source_mapping(resource)
+    wrapped = values.get("keypair")
+    if wrapped is not None:
+        resource = wrapped
+    type_value = _optional_text(resource, "type")
+    try:
+        key_type = KeyPairType(type_value) if type_value else None
+    except ValueError:
+        key_type = None
+    public_key = _optional_text(resource, "public_key")
+    return KeyPair(
+        name=_required_text(resource, "name"),
+        type=key_type,
+        fingerprint=_optional_text(resource, "fingerprint"),
+        public_key_preview=(
+            f"{public_key[:61]}..."
+            if public_key is not None and len(public_key) > 64
+            else public_key
+        ),
+        created_at=_created_at(resource),
+        last_used_at=_optional_datetime(resource, "last_used_at"),
+    )
+
+
+def _optional_datetime(value: Any, *names: str) -> datetime | None:
+    present, raw = _source_value(value, *names)
+    if not present or raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.replace(tzinfo=UTC) if raw.tzinfo is None else raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def _normalize_network(resource: Any) -> Network:
+    present, subnets = _source_value(resource, "subnets")
+    subnet_count = len(subnets) if present and isinstance(subnets, list) else None
+    return Network(
+        id=UUID(_required_text(resource, "id")),
+        name=_optional_text(resource, "name"),
+        status=_optional_text(resource, "status"),
+        shared=_optional_bool(resource, "shared", "is_shared"),
+        external=_optional_bool(resource, "router:external", "is_router_external", "external"),
+        mtu=_optional_int(resource, "mtu"),
+        subnet_count=subnet_count,
+    )
+
+
+def _normalize_security_group(resource: Any) -> SecurityGroup:
+    present, rules = _source_value(resource, "security_group_rules", "rules")
+    rule_count = len(rules) if present and isinstance(rules, list) else None
+    return SecurityGroup(
+        id=UUID(_required_text(resource, "id")),
+        name=_optional_text(resource, "name"),
+        description=_optional_text(resource, "description"),
+        rule_count=rule_count,
+        revision_number=_optional_int(resource, "revision_number"),
+    )
+
+
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     if isinstance(value, Mapping):
         return value
@@ -623,9 +1070,7 @@ def _number(value: Any, names: tuple[str, ...]) -> int | float | None:
     return None
 
 
-def _normalize_quota_resource(
-    service: QuotaService, resource: Any
-) -> tuple[Quota, ...]:
+def _normalize_quota_resource(service: QuotaService, resource: Any) -> tuple[Quota, ...]:
     quotas: list[Quota] = []
     for name, aliases, unit in _QUOTA_SPECS[service]:
         raw = _resource_value(resource, aliases)
@@ -705,6 +1150,25 @@ def _quota_failure(exc: Exception) -> AdapterError:
 
 
 def _instance_failure(exc: Exception) -> AdapterError:
+    if isinstance(exc, AdapterTimeoutError):
+        return AdapterTimeoutError(request_id=exc.request_id)
+    if isinstance(exc, AdapterError):
+        if exc.status_code == 504:
+            return AdapterTimeoutError(request_id=exc.request_id)
+        return AdapterError(status_code=exc.status_code, request_id=exc.request_id)
+    request_id = _request_id(exc)
+    timeout_names = {"ConnectTimeout", "ReadTimeout", "RequestTimeout", "Timeout"}
+    if isinstance(exc, TimeoutError) or exc.__class__.__name__ in timeout_names:
+        return AdapterTimeoutError(request_id=request_id)
+    status = _status_code(exc)
+    if status == 504:
+        return AdapterTimeoutError(request_id=request_id)
+    if status not in {400, 401, 403, 404, 409, 429}:
+        status = 503
+    return AdapterError(status_code=status, request_id=request_id)
+
+
+def _provisioning_failure(exc: Exception) -> AdapterError:
     if isinstance(exc, AdapterTimeoutError):
         return AdapterTimeoutError(request_id=exc.request_id)
     if isinstance(exc, AdapterError):

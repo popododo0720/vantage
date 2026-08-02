@@ -23,6 +23,8 @@ tags:
     description: Detailed compute, network, and storage quota usage.
   - name: Instances
     description: Bounded, project-scoped Nova inventory and instance details.
+  - name: Provisioning Inputs
+    description: Bounded, project-scoped inventories used to provision instances.
 paths:
   /session:
     get:
@@ -294,6 +296,131 @@ paths:
           $ref: "#/components/responses/GatewayTimeout"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+  /images:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List images available to the active project
+      operationId: listImages
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: visibility
+          in: query
+          schema: {type: string, enum: [private, shared, community, public]}
+      responses:
+        "200":
+          description: A bounded cursor-backed image page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ImagePage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /flavors:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List flavors available to the active project
+      operationId: listFlavors
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+      responses:
+        "200":
+          description: A bounded cursor-backed flavor page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FlavorPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /keypairs:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List keypairs in the active project
+      operationId: listKeyPairs
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+      responses:
+        "200":
+          description: A bounded cursor-backed keypair page without private material.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyPairPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /networks:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List project-visible networks
+      operationId: listNetworks
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: status
+          in: query
+          schema: {type: string, maxLength: 64}
+      responses:
+        "200":
+          description: A bounded cursor-backed network page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NetworkPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /security-groups:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List project-visible security groups
+      operationId: listSecurityGroups
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema: {type: string, maxLength: 255}
+      responses:
+        "200":
+          description: A bounded cursor-backed security-group page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SecurityGroupPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
   /instances/{instance_id}:
     get:
       tags: [Instances]
@@ -630,6 +757,116 @@ components:
             $ref: "#/components/schemas/Instance"
         page:
           $ref: "#/components/schemas/PageInfo"
+    Image:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, visibility, disk_format, container_format, size_bytes, min_disk_gib, min_ram_mib, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        status: {anyOf: [{type: string}, {type: "null"}]}
+        visibility:
+          anyOf:
+            - {type: string, enum: [private, shared, community, public]}
+            - {type: "null"}
+        disk_format: {anyOf: [{type: string}, {type: "null"}]}
+        container_format: {anyOf: [{type: string}, {type: "null"}]}
+        size_bytes: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        min_disk_gib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        min_ram_mib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        created_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    ImagePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Image"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    Flavor:
+      type: object
+      additionalProperties: false
+      required: [id, name, vcpus, ram_mib, disk_gib, ephemeral_gib, is_public]
+      properties:
+        id: {type: string}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        vcpus: {anyOf: [{type: integer, minimum: 1}, {type: "null"}]}
+        ram_mib: {anyOf: [{type: integer, minimum: 1}, {type: "null"}]}
+        disk_gib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        ephemeral_gib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        is_public: {anyOf: [{type: boolean}, {type: "null"}]}
+    FlavorPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Flavor"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    KeyPair:
+      type: object
+      additionalProperties: false
+      required: [name, type, fingerprint, public_key_preview, created_at, last_used_at]
+      properties:
+        name: {type: string}
+        type:
+          anyOf:
+            - {type: string, enum: [ssh, x509]}
+            - {type: "null"}
+        fingerprint: {anyOf: [{type: string}, {type: "null"}]}
+        public_key_preview: {anyOf: [{type: string}, {type: "null"}]}
+        created_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        last_used_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    KeyPairPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/KeyPair"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    Network:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, shared, external, mtu, subnet_count]
+      properties:
+        id: {type: string, format: uuid}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        status: {anyOf: [{type: string}, {type: "null"}]}
+        shared: {anyOf: [{type: boolean}, {type: "null"}]}
+        external: {anyOf: [{type: boolean}, {type: "null"}]}
+        mtu: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        subnet_count: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+    NetworkPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Network"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    SecurityGroup:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, rule_count, revision_number]
+      properties:
+        id: {type: string, format: uuid}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        description: {anyOf: [{type: string}, {type: "null"}]}
+        rule_count: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        revision_number: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+    SecurityGroupPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/SecurityGroup"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
     InstanceVolumeAttachment:
       type: object
       additionalProperties: false

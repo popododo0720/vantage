@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, NoReturn, cast
+from typing import Annotated, Any, NoReturn, cast
 
 from fastapi import Cookie, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -18,6 +18,7 @@ from vantage_bff.adapters.base import (
     AdapterTimeoutError,
     AuthenticationError,
     OpenStackAdapter,
+    ProvisioningListResult,
     ScopeError,
 )
 from vantage_bff.adapters.fake import FakeOpenStackAdapter
@@ -25,11 +26,16 @@ from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
 from vantage_bff.config import Settings
 from vantage_bff.cursors import CursorKey, MemoryCursorStore
 from vantage_bff.models import (
+    FlavorPage,
+    ImagePage,
+    ImageVisibility,
     InstanceDetail,
     InstancePage,
     InstanceSort,
     InstanceSummary,
+    KeyPairPage,
     LoginRequest,
+    NetworkPage,
     PageInfo,
     Problem,
     ProjectOverview,
@@ -39,11 +45,13 @@ from vantage_bff.models import (
     QuotaService,
     Scope,
     ScopeRequest,
+    SecurityGroupPage,
     SessionPreferenceRequest,
     SessionResponse,
     SortDirection,
     WidgetError,
 )
+from vantage_bff.operations import MemoryOperationStore, OperationStore
 from vantage_bff.rate_limit import LoginRateLimiter
 from vantage_bff.sessions import (
     MemorySessionStore,
@@ -100,6 +108,7 @@ def _adapter(settings: Settings) -> OpenStackAdapter:
             request_timeout_seconds=settings.request_timeout_seconds,
             quota_timeout_seconds=settings.quota_source_timeout_seconds,
             instance_timeout_seconds=settings.instance_source_timeout_seconds,
+            provisioning_timeout_seconds=settings.provisioning_source_timeout_seconds,
             thread_capacity=settings.openstack_sdk_thread_capacity,
         )
     raise RuntimeError(f"Unsupported adapter: {settings.adapter}")
@@ -110,6 +119,7 @@ def create_app(
     adapter: OpenStackAdapter | None = None,
     store: SessionStore | None = None,
     cursor_store: MemoryCursorStore | None = None,
+    operation_store: OperationStore | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
     frontend_root = Path(__file__).resolve().parents[2] / "frontend" / "dist"
@@ -123,6 +133,10 @@ def create_app(
             active_settings.instance_cursor_ttl_seconds,
             active_settings.instance_cursor_max_chains,
             active_settings.instance_cursor_max_pages,
+        )
+        app.state.operations = operation_store or MemoryOperationStore(
+            terminal_ttl_seconds=active_settings.operation_terminal_ttl_seconds,
+            max_records=active_settings.operation_max_records,
         )
         app.state.login_limiter = LoginRateLimiter(
             active_settings.login_attempt_limit,
@@ -270,6 +284,19 @@ def create_app(
             ),
         )
 
+    def provisioning_cursor_key(
+        record: SessionRecord,
+        resource: str,
+        *,
+        limit: int,
+        filters: tuple[tuple[str, str | None], ...],
+    ) -> CursorKey:
+        return CursorKey(
+            scope_namespace=record.scope_namespace,
+            resource=resource,
+            query=(("limit", str(limit)), *filters),
+        )
+
     def normalized_optional_filter(value: str | None) -> str | None:
         if value is None:
             return None
@@ -302,12 +329,7 @@ def create_app(
                 "Session missing or expired",
                 openstack_request_id=exc.request_id,
             ) from exc
-        if (
-            not detail
-            and marker_bound
-            and cursor_key is not None
-            and exc.status_code in {400, 404}
-        ):
+        if not detail and marker_bound and cursor_key is not None and exc.status_code in {400, 404}:
             await instance_cursors(request).invalidate(cursor_key)
             raise ApiError(
                 409,
@@ -377,6 +399,189 @@ def create_app(
             openstack_request_id=exc.request_id,
         ) from exc
 
+    async def raise_provisioning_error(
+        request: Request,
+        record: SessionRecord,
+        exc: AdapterError,
+        *,
+        resource: str,
+        singular: str,
+        service: str,
+        cursor_key: CursorKey,
+        marker_bound: bool,
+    ) -> NoReturn:
+        if isinstance(exc, AdapterTimeoutError) or exc.status_code == 504:
+            raise ApiError(
+                504,
+                f"{singular}_timeout",
+                f"{service} request timed out",
+                f"The {service.lower()} service did not respond in time",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 401:
+            await invalidate_session(request, record)
+            raise ApiError(
+                401,
+                "unauthenticated",
+                "Authentication required",
+                "Session missing or expired",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if marker_bound and exc.status_code in {400, 404}:
+            await instance_cursors(request).invalidate(cursor_key)
+            raise ApiError(
+                409,
+                "page_cursor_unavailable",
+                "Page no longer available",
+                f"Return to page 1 to rebuild the {resource} page sequence",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 400:
+            raise ApiError(
+                422,
+                f"invalid_{singular}_filter",
+                f"Invalid {singular.replace('_', ' ')} filter",
+                f"The {service.lower()} service rejected one or more filters",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 403:
+            raise ApiError(
+                403,
+                f"{resource.replace('-', '_')}_forbidden",
+                f"{resource.replace('-', ' ').title()} unavailable",
+                f"The {service.lower()} policy denied this request",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 404:
+            raise ApiError(
+                404,
+                f"{resource.replace('-', '_')}_not_found",
+                f"{resource.replace('-', ' ').title()} unavailable",
+                f"The {service.lower()} service could not find this collection",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 409:
+            await instance_cursors(request).invalidate(cursor_key)
+            raise ApiError(
+                409,
+                "page_cursor_unavailable",
+                "Page no longer available",
+                f"Return to page 1 to rebuild the {resource} page sequence",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        if exc.status_code == 429:
+            raise ApiError(
+                429,
+                f"{singular}_rate_limited",
+                f"{service} request rate limited",
+                f"The {service.lower()} service temporarily rate limited this request",
+                openstack_request_id=exc.request_id,
+            ) from exc
+        raise ApiError(
+            503,
+            f"{singular}_unavailable",
+            f"{service} temporarily unavailable",
+            f"The {service.lower()} service is temporarily unavailable",
+            openstack_request_id=exc.request_id,
+        ) from exc
+
+    async def provisioning_page(
+        request: Request,
+        response: Response,
+        record: SessionRecord,
+        *,
+        resource: str,
+        singular: str,
+        service: str,
+        limit: int,
+        page: int,
+        filters: tuple[tuple[str, str | None], ...],
+        load: Callable[[str | None], Awaitable[ProvisioningListResult]],
+    ) -> tuple[list[Any], PageInfo]:
+        if limit not in {10, 25, 50, 100}:
+            raise ApiError(
+                422,
+                "invalid_page_size",
+                "Invalid page size",
+                "Allowed values are 10, 25, 50, and 100",
+            )
+        active_scope(record)
+        cursor_key = provisioning_cursor_key(record, resource, limit=limit, filters=filters)
+        cursors = instance_cursors(request)
+        lease = await cursors.acquire(cursor_key, page)
+        if lease is None:
+            raise ApiError(
+                409,
+                "page_cursor_unavailable",
+                "Page not available yet",
+                f"Open the preceding {resource} page before requesting this page",
+            )
+        cursor_committed = False
+        try:
+            try:
+                result = await asyncio.wait_for(
+                    load(lease.marker),
+                    timeout=active_settings.provisioning_source_timeout_seconds,
+                )
+            except TimeoutError:
+                await raise_provisioning_error(
+                    request,
+                    record,
+                    AdapterTimeoutError(),
+                    resource=resource,
+                    singular=singular,
+                    service=service,
+                    cursor_key=cursor_key,
+                    marker_bound=lease.marker is not None,
+                )
+            except AdapterError as exc:
+                await raise_provisioning_error(
+                    request,
+                    record,
+                    exc,
+                    resource=resource,
+                    singular=singular,
+                    service=service,
+                    cursor_key=cursor_key,
+                    marker_bound=lease.marker is not None,
+                )
+            visible_items = list(result.items[:limit])
+            has_next = len(result.items) > limit or result.has_next
+            next_marker = None
+            if has_next and visible_items:
+                last = visible_items[-1]
+                marker_value = getattr(last, "id", None) or getattr(last, "name", None)
+                next_marker = str(marker_value) if marker_value is not None else None
+            known_pages = await cursors.complete(lease, next_marker)
+            if known_pages is None:
+                raise ApiError(
+                    409,
+                    "page_cursor_changed",
+                    f"{resource.replace('-', ' ').title()} pages changed",
+                    "A newer page refresh replaced this response",
+                )
+            cursor_committed = True
+            known_max = max(known_pages)
+            has_next = has_next and page + 1 in known_pages
+            start = (page - 1) * limit
+            if result.openstack_request_id is not None:
+                response.headers["X-OpenStack-Request-ID"] = result.openstack_request_id
+            return visible_items, PageInfo(
+                number=page,
+                size=limit,
+                item_from=start + 1 if visible_items else 0,
+                item_to=start + len(visible_items) if visible_items else 0,
+                total_items=None,
+                total_pages=None,
+                has_previous=page > 1,
+                has_next=has_next,
+                navigable_pages=_navigable_pages(page, known_max),
+                openstack_request_id=result.openstack_request_id,
+            )
+        finally:
+            if not cursor_committed:
+                await cursors.abandon(lease)
+
     async def collect_quotas(
         request: Request,
         record: SessionRecord,
@@ -429,19 +634,13 @@ def create_app(
                 message = f"{service.value.capitalize()} quota data did not respond in time"
             elif isinstance(result, AdapterError) and result.status_code == 403:
                 suffix = "forbidden"
-                message = (
-                    f"{service.value.capitalize()} quota data is not available for this scope"
-                )
+                message = f"{service.value.capitalize()} quota data is not available for this scope"
             elif isinstance(result, AdapterError) and result.status_code == 429:
                 suffix = "rate_limited"
-                message = (
-                    f"{service.value.capitalize()} quota data is temporarily rate limited"
-                )
+                message = f"{service.value.capitalize()} quota data is temporarily rate limited"
             else:
                 suffix = "unavailable"
-                message = (
-                    f"{service.value.capitalize()} quota data is temporarily unavailable"
-                )
+                message = f"{service.value.capitalize()} quota data is temporarily unavailable"
             error = WidgetError(
                 code=f"{service.value}_quota_{suffix}",
                 message=message,
@@ -521,9 +720,7 @@ def create_app(
             previous = await request.app.state.sessions.get(previous_session_id)
             await request.app.state.sessions.delete(previous_session_id)
             if previous is not None:
-                await instance_cursors(request).invalidate_namespace(
-                    previous.scope_namespace
-                )
+                await instance_cursors(request).invalidate_namespace(previous.scope_namespace)
         set_session_cookie(response, record)
         return record.public()
 
@@ -589,7 +786,8 @@ def create_app(
                 "Allowed values are 10, 25, 50, and 100",
             )
         filtered = [
-            project for project in record.projects
+            project
+            for project in record.projects
             if name is None or name.casefold() in project.name.casefold()
         ]
         total = len(filtered)
@@ -690,9 +888,7 @@ def create_app(
             record,
             auth_context=result.auth_context,
             active_scope=Scope(project=result.project, region=result.region),
-            scope_namespace=(
-                new_scope_namespace() if scope_changed else record.scope_namespace
-            ),
+            scope_namespace=(new_scope_namespace() if scope_changed else record.scope_namespace),
             expires_at=min(
                 record.expires_at,
                 result.expires_at or record.expires_at,
@@ -726,8 +922,7 @@ def create_app(
             (
                 quota
                 for quota in quotas
-                if quota.service is QuotaService.COMPUTE
-                and quota.resource == "instances"
+                if quota.service is QuotaService.COMPUTE and quota.resource == "instances"
             ),
             None,
         )
@@ -763,6 +958,194 @@ def create_app(
             partial_errors=errors,
         )
 
+    @app.get("/api/v1/images", response_model=ImagePage)
+    async def images(
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        limit: Annotated[int, Query()] = 25,
+        page: Annotated[int, Query(ge=1)] = 1,
+        name: Annotated[str | None, Query(max_length=255)] = None,
+        visibility: Annotated[ImageVisibility | None, Query()] = None,
+    ) -> ImagePage:
+        scope = active_scope(record)
+        normalized_name = normalized_optional_filter(name)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+
+        async def load(marker: str | None) -> ProvisioningListResult:
+            return await adapter.list_images(
+                record.auth_context,
+                scope.project.id,
+                scope.region,
+                limit=limit + 1,
+                marker=marker,
+                name=normalized_name,
+                visibility=visibility,
+            )
+
+        items, page_info = await provisioning_page(
+            request,
+            response,
+            record,
+            resource="images",
+            singular="image",
+            service="Image",
+            limit=limit,
+            page=page,
+            filters=(
+                ("name", normalized_name),
+                ("visibility", visibility.value if visibility else None),
+            ),
+            load=load,
+        )
+        return ImagePage(items=items, page=page_info)
+
+    @app.get("/api/v1/flavors", response_model=FlavorPage)
+    async def flavors(
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        limit: Annotated[int, Query()] = 25,
+        page: Annotated[int, Query(ge=1)] = 1,
+    ) -> FlavorPage:
+        scope = active_scope(record)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+
+        async def load(marker: str | None) -> ProvisioningListResult:
+            return await adapter.list_flavors(
+                record.auth_context,
+                scope.project.id,
+                scope.region,
+                limit=limit + 1,
+                marker=marker,
+            )
+
+        items, page_info = await provisioning_page(
+            request,
+            response,
+            record,
+            resource="flavors",
+            singular="flavor",
+            service="Compute",
+            limit=limit,
+            page=page,
+            filters=(),
+            load=load,
+        )
+        return FlavorPage(items=items, page=page_info)
+
+    @app.get("/api/v1/keypairs", response_model=KeyPairPage)
+    async def keypairs(
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        limit: Annotated[int, Query()] = 25,
+        page: Annotated[int, Query(ge=1)] = 1,
+    ) -> KeyPairPage:
+        scope = active_scope(record)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+
+        async def load(marker: str | None) -> ProvisioningListResult:
+            return await adapter.list_keypairs(
+                record.auth_context,
+                scope.project.id,
+                scope.region,
+                limit=limit + 1,
+                marker=marker,
+            )
+
+        items, page_info = await provisioning_page(
+            request,
+            response,
+            record,
+            resource="keypairs",
+            singular="keypair",
+            service="Compute",
+            limit=limit,
+            page=page,
+            filters=(),
+            load=load,
+        )
+        return KeyPairPage(items=items, page=page_info)
+
+    @app.get("/api/v1/networks", response_model=NetworkPage)
+    async def networks(
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        limit: Annotated[int, Query()] = 25,
+        page: Annotated[int, Query(ge=1)] = 1,
+        name: Annotated[str | None, Query(max_length=255)] = None,
+        status: Annotated[str | None, Query(max_length=64)] = None,
+    ) -> NetworkPage:
+        scope = active_scope(record)
+        normalized_name = normalized_optional_filter(name)
+        normalized_status_value = normalized_optional_filter(status)
+        normalized_status = normalized_status_value.upper() if normalized_status_value else None
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+
+        async def load(marker: str | None) -> ProvisioningListResult:
+            return await adapter.list_networks(
+                record.auth_context,
+                scope.project.id,
+                scope.region,
+                limit=limit + 1,
+                marker=marker,
+                name=normalized_name,
+                status=normalized_status,
+            )
+
+        items, page_info = await provisioning_page(
+            request,
+            response,
+            record,
+            resource="networks",
+            singular="network",
+            service="Network",
+            limit=limit,
+            page=page,
+            filters=(("name", normalized_name), ("status", normalized_status)),
+            load=load,
+        )
+        return NetworkPage(items=items, page=page_info)
+
+    @app.get("/api/v1/security-groups", response_model=SecurityGroupPage)
+    async def security_groups(
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        limit: Annotated[int, Query()] = 25,
+        page: Annotated[int, Query(ge=1)] = 1,
+        name: Annotated[str | None, Query(max_length=255)] = None,
+    ) -> SecurityGroupPage:
+        scope = active_scope(record)
+        normalized_name = normalized_optional_filter(name)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+
+        async def load(marker: str | None) -> ProvisioningListResult:
+            return await adapter.list_security_groups(
+                record.auth_context,
+                scope.project.id,
+                scope.region,
+                limit=limit + 1,
+                marker=marker,
+                name=normalized_name,
+            )
+
+        items, page_info = await provisioning_page(
+            request,
+            response,
+            record,
+            resource="security-groups",
+            singular="security_group",
+            service="Network",
+            limit=limit,
+            page=page,
+            filters=(("name", normalized_name),),
+            load=load,
+        )
+        return SecurityGroupPage(items=items, page=page_info)
+
     @app.get("/api/v1/instances", response_model=InstancePage)
     async def instances(
         request: Request,
@@ -787,9 +1170,7 @@ def create_app(
         normalized_name = normalized_optional_filter(name)
         normalized_status_value = normalized_optional_filter(status)
         normalized_status = (
-            normalized_status_value.upper()
-            if normalized_status_value is not None
-            else None
+            normalized_status_value.upper() if normalized_status_value is not None else None
         )
         normalized_image_id = normalized_optional_filter(image_id)
         cursor_key = instance_cursor_key(
@@ -851,11 +1232,7 @@ def create_app(
 
             visible_items = list(result.items[:limit])
             has_next = len(result.items) > limit or result.has_next
-            next_marker = (
-                str(visible_items[-1].id)
-                if has_next and visible_items
-                else None
-            )
+            next_marker = str(visible_items[-1].id) if has_next and visible_items else None
             known_pages = await cursors.complete(lease, next_marker)
             if known_pages is None:
                 raise ApiError(
@@ -935,6 +1312,8 @@ def create_app(
         @app.get("/quotas", include_in_schema=False)
         @app.get("/instances", include_in_schema=False)
         @app.get("/instances/{instance_id}", include_in_schema=False)
+        @app.get("/images", include_in_schema=False)
+        @app.get("/keypairs", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")
 

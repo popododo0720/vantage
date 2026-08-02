@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { resetCsrfForTest } from './api'
-import type { InstanceDetail, InstancePage } from './types'
+import type { ImagePage, InstanceDetail, InstancePage, KeyPairPage } from './types'
 
 const projects = [{ id: 'project-alpha', name: 'Alpha', enabled: true }]
 
@@ -99,6 +99,30 @@ const serverDetail: InstanceDetail = {
   ...server,
   volumes: [{ id: 'volume-01', device: '/dev/vdb' }, { id: 'volume-02', device: null }],
   openstack_request_id: 'req-detail-1',
+}
+
+const imagePage: ImagePage = {
+  items: [{
+    id: 'image-ubuntu', name: 'Ubuntu 24.04', status: 'active', visibility: 'public',
+    disk_format: 'qcow2', container_format: 'bare', size_bytes: 2_147_483_648,
+    min_disk_gib: 20, min_ram_mib: 2048, created_at: '2026-07-01T09:00:00Z',
+  }],
+  page: {
+    number: 1, size: 25, item_from: 1, item_to: 1, total_items: 26, total_pages: 2,
+    has_previous: false, has_next: true, navigable_pages: [1, 2],
+  },
+}
+
+const keyPairPage: KeyPairPage = {
+  items: [{
+    name: 'ops-key', type: 'ssh', fingerprint: 'SHA256:abc123',
+    public_key_preview: 'ssh-ed25519 AAAAC3...', created_at: '2026-06-01T09:00:00Z',
+    last_used_at: '2026-07-31T11:00:00Z',
+  }],
+  page: {
+    number: 1, size: 25, item_from: 1, item_to: 1, total_items: 1, total_pages: 1,
+    has_previous: false, has_next: false, navigable_pages: [1],
+  },
 }
 
 function scopedFetch({
@@ -1015,5 +1039,150 @@ describe('session and scope flow', () => {
     expect(`${window.location.pathname}${window.location.search}`).toBe(
       '/instances?limit=50&status=ACTIVE&sort=name&direction=asc',
     )
+  })
+
+  it('renders the separate image route, filters it, and uses shared numbered pagination', async () => {
+    window.history.replaceState({}, '', '/images?limit=50&page=2&name=ubuntu&visibility=public')
+    const requests: string[] = []
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/images?')) {
+        requests.push(url)
+        const parameters = new URL(url, 'http://local').searchParams
+        const page = Number(parameters.get('page'))
+        return Promise.resolve(json({
+          ...imagePage,
+          page: { ...imagePage.page, number: page, size: Number(parameters.get('limit')),
+            has_previous: page > 1, has_next: page < 2 },
+        }))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    expect(await screen.findByRole('table', { name: 'Images' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Images' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Key pairs' })).toHaveAttribute('href', '/keypairs')
+    expect(screen.getByText('qcow2 / bare')).toBeInTheDocument()
+    expect(screen.getByText('2 GiB')).toBeInTheDocument()
+    expect(screen.getByText('20 GiB disk / 2,048 MiB RAM')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Visibility'), { target: { value: 'private' } })
+    await waitFor(() => expect(requests.at(-1)).toBe(
+      '/api/v1/images?limit=50&page=1&name=ubuntu&visibility=private',
+    ))
+    fireEvent.change(screen.getByLabelText('Filter by name'), { target: { value: 'debian' } })
+    await waitFor(() => expect(requests.at(-1)).toBe(
+      '/api/v1/images?limit=50&page=1&name=debian&visibility=private',
+    ), { timeout: 1_500 })
+    expect(`${window.location.pathname}${window.location.search}`).toBe(
+      '/images?limit=50&name=debian&visibility=private',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Page 2' }))
+    await waitFor(() => expect(requests.at(-1)).toContain('page=2&name=debian&visibility=private'))
+    expect(window.location.search).toContain('page=2')
+  })
+
+  it('renders key pairs on their own route and localizes without losing query state', async () => {
+    const route = '/keypairs?limit=10'
+    window.history.replaceState({}, '', route)
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/session' && !init?.method) return Promise.resolve(json(scopedSession))
+      if (url === '/api/v1/session' && init?.method === 'PATCH') {
+        return Promise.resolve(json({ ...scopedSession, locale: 'ko' }))
+      }
+      if (url.startsWith('/api/v1/keypairs?')) return Promise.resolve(json(keyPairPage))
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    expect(await screen.findByRole('table', { name: 'Key pairs' })).toBeInTheDocument()
+    expect(screen.getByText('SHA256:abc123')).toBeInTheDocument()
+    expect(screen.getByText('ssh-ed25519 AAAAC3...')).toBeInTheDocument()
+    const callsBefore = fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/keypairs?')).length
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ko' } })
+    expect(await screen.findByRole('heading', { name: '키 페어' })).toBeInTheDocument()
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/keypairs?'))).toHaveLength(callsBefore)
+  })
+
+  it.each(['page_cursor_unavailable', 'page_cursor_changed'])(
+    'recovers image %s conflicts at page one while retaining filters',
+    async (code) => {
+      window.history.replaceState({}, '', '/images?limit=100&page=3&name=base&visibility=shared')
+      const requests: string[] = []
+      vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+        const url = String(input)
+        if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+        if (url.startsWith('/api/v1/images?')) {
+          requests.push(url)
+          if (requests.length === 1) return Promise.resolve(json({
+            detail: 'raw cursor detail', code, trace_id: 'trace-cursor',
+          }, { status: 409 }))
+          return Promise.resolve(json(imagePage))
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      }))
+
+      render(<App />)
+      expect(await screen.findByRole('table', { name: 'Images' })).toBeInTheDocument()
+      expect(requests).toEqual([
+        '/api/v1/images?limit=100&page=3&name=base&visibility=shared',
+        '/api/v1/images?limit=100&page=1&name=base&visibility=shared',
+      ])
+      expect(`${window.location.pathname}${window.location.search}`).toBe(
+        '/images?limit=100&name=base&visibility=shared',
+      )
+    },
+  )
+
+  it('reauthenticates on a key-pair 401 while preserving its route', async () => {
+    const route = '/keypairs?limit=50&page=2'
+    window.history.replaceState({}, '', route)
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/keypairs?')) return Promise.resolve(json({
+        detail: 'expired', code: 'unauthenticated', trace_id: 'trace-auth',
+      }, { status: 401 }))
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    render(<App />)
+    expect(await screen.findByRole('dialog', { name: 'Session expired' })).toBeInTheDocument()
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+    expect(screen.queryByRole('table', { name: 'Key pairs' })).not.toBeInTheDocument()
+  })
+
+  it.each([403, 404])('clears stale key-pair rows after a %s refresh', async (status) => {
+    window.history.replaceState({}, '', '/keypairs')
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url === '/api/v1/session') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/keypairs?')) {
+        calls += 1
+        if (calls === 1) return Promise.resolve(json(keyPairPage))
+        return Promise.resolve(json({
+          detail: 'raw forbidden detail',
+          code: status === 403 ? 'keypairs_forbidden' : 'keypairs_not_found',
+          trace_id: `trace-${status}`,
+        }, { status }))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    render(<App />)
+    expect(await screen.findByText('ops-key')).toBeInTheDocument()
+    act(() => window.dispatchEvent(new Event('focus')))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      status === 403 ? 'You do not have permission to view key pairs' : 'The key pair list is unavailable',
+    )
+    expect(screen.queryByText('ops-key')).not.toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: 'Key pairs' })).not.toBeInTheDocument()
   })
 })

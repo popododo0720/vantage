@@ -179,6 +179,93 @@ class InstanceDetail(Instance):
     openstack_request_id: str | None
 
 
+class ImageVisibility(StrEnum):
+    PRIVATE = "private"
+    SHARED = "shared"
+    COMMUNITY = "community"
+    PUBLIC = "public"
+
+
+class Image(StrictModel):
+    id: UUID
+    name: str | None = None
+    status: str | None = None
+    visibility: ImageVisibility | None = None
+    disk_format: str | None = None
+    container_format: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    min_disk_gib: int | None = Field(default=None, ge=0)
+    min_ram_mib: int | None = Field(default=None, ge=0)
+    created_at: datetime | None = None
+
+
+class ImagePage(StrictModel):
+    items: list[Image]
+    page: PageInfo
+
+
+class Flavor(StrictModel):
+    id: str
+    name: str | None = None
+    vcpus: int | None = Field(default=None, ge=1)
+    ram_mib: int | None = Field(default=None, ge=1)
+    disk_gib: int | None = Field(default=None, ge=0)
+    ephemeral_gib: int | None = Field(default=None, ge=0)
+    is_public: bool | None = None
+
+
+class FlavorPage(StrictModel):
+    items: list[Flavor]
+    page: PageInfo
+
+
+class KeyPairType(StrEnum):
+    SSH = "ssh"
+    X509 = "x509"
+
+
+class KeyPair(StrictModel):
+    name: str
+    type: KeyPairType | None = None
+    fingerprint: str | None = None
+    public_key_preview: str | None = None
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
+class KeyPairPage(StrictModel):
+    items: list[KeyPair]
+    page: PageInfo
+
+
+class Network(StrictModel):
+    id: UUID
+    name: str | None = None
+    status: str | None = None
+    shared: bool | None = None
+    external: bool | None = None
+    mtu: int | None = Field(default=None, ge=0)
+    subnet_count: int | None = Field(default=None, ge=0)
+
+
+class NetworkPage(StrictModel):
+    items: list[Network]
+    page: PageInfo
+
+
+class SecurityGroup(StrictModel):
+    id: UUID
+    name: str | None = None
+    description: str | None = None
+    rule_count: int | None = Field(default=None, ge=0)
+    revision_number: int | None = Field(default=None, ge=0)
+
+
+class SecurityGroupPage(StrictModel):
+    items: list[SecurityGroup]
+    page: PageInfo
+
+
 class Problem(StrictModel):
     type: str = "about:blank"
     title: str

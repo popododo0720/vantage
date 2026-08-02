@@ -5,15 +5,21 @@ from datetime import datetime
 from typing import Any, Protocol, cast
 
 from vantage_bff.models import (
+    Flavor,
+    Image,
+    ImageVisibility,
     Instance,
     InstanceDetail,
     InstanceSort,
+    KeyPair,
+    Network,
     Project,
     Quota,
     QuotaResource,
     QuotaService,
     QuotaState,
     QuotaUnit,
+    SecurityGroup,
     SortDirection,
     User,
 )
@@ -65,6 +71,13 @@ class ScopeResult:
 @dataclass(frozen=True, slots=True)
 class InstanceListResult:
     items: tuple[Instance, ...]
+    has_next: bool = False
+    openstack_request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisioningListResult:
+    items: tuple[Image | Flavor | KeyPair | Network | SecurityGroup, ...]
     has_next: bool = False
     openstack_request_id: str | None = None
 
@@ -140,3 +153,58 @@ class OpenStackAdapter(Protocol):
         region: str,
         instance_id: str,
     ) -> InstanceDetail: ...
+
+    async def list_images(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        visibility: ImageVisibility | None,
+    ) -> ProvisioningListResult: ...
+
+    async def list_flavors(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult: ...
+
+    async def list_keypairs(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult: ...
+
+    async def list_networks(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        status: str | None,
+    ) -> ProvisioningListResult: ...
+
+    async def list_security_groups(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+    ) -> ProvisioningListResult: ...

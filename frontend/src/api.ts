@@ -2,6 +2,10 @@ import type {
   InstanceDetail,
   InstancePage,
   InstanceQuery,
+  ImagePage,
+  ImageQuery,
+  InventoryQuery,
+  KeyPairPage,
   Problem,
   ProjectOverview,
   ProjectPage,
@@ -112,6 +116,22 @@ export const api = {
       direction: filters.direction,
     })
     return request<InstancePage>(`/instances?${query}`, { signal })
+  },
+  images: (filters: ImageQuery, signal?: AbortSignal) => {
+    const query = new URLSearchParams({
+      limit: String(filters.limit),
+      page: String(filters.page),
+    })
+    if (filters.name) query.set('name', filters.name)
+    if (filters.visibility) query.set('visibility', filters.visibility)
+    return request<ImagePage>(`/images?${query}`, { signal })
+  },
+  keypairs: (filters: InventoryQuery, signal?: AbortSignal) => {
+    const query = new URLSearchParams({
+      limit: String(filters.limit),
+      page: String(filters.page),
+    })
+    return request<KeyPairPage>(`/keypairs?${query}`, { signal })
   },
   instance: (instanceId: string, signal?: AbortSignal) =>
     request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),

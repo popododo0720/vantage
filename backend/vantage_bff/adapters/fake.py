@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
@@ -10,19 +11,27 @@ from vantage_bff.adapters.base import (
     AuthenticationError,
     AuthResult,
     InstanceListResult,
+    ProvisioningListResult,
     ScopeError,
     ScopeResult,
     normalized_quota,
 )
 from vantage_bff.models import (
+    Flavor,
+    Image,
+    ImageVisibility,
     Instance,
     InstanceDetail,
     InstanceSort,
     InstanceVolume,
+    KeyPair,
+    KeyPairType,
+    Network,
     Project,
     Quota,
     QuotaService,
     QuotaUnit,
+    SecurityGroup,
     SortDirection,
     User,
 )
@@ -94,9 +103,7 @@ class FakeOpenStackAdapter:
                 ("cores", 18 * multiplier, 2, 40, QuotaUnit.COUNT),
                 ("ram_mib", 49152 * multiplier, 0, 98304, QuotaUnit.MIB),
             ),
-            QuotaService.NETWORK: (
-                ("floating_ips", 3 * multiplier, 0, 10, QuotaUnit.COUNT),
-            ),
+            QuotaService.NETWORK: (("floating_ips", 3 * multiplier, 0, 10, QuotaUnit.COUNT),),
             QuotaService.STORAGE: (
                 ("volumes", 8 * multiplier, 0, 20, QuotaUnit.COUNT),
                 ("gigabytes", 460 * multiplier, 40, 1000, QuotaUnit.GIB),
@@ -175,16 +182,209 @@ class FakeOpenStackAdapter:
         )
         if instance is None:
             raise AdapterError(status_code=404, request_id=self._request_id())
-        volumes = None if instance.name is None else [
-            InstanceVolume(
-                id=str(uuid5(_FAKE_NAMESPACE, f"{instance.id}:volume")),
-                device="/dev/vda",
-            )
-        ]
+        volumes = (
+            None
+            if instance.name is None
+            else [
+                InstanceVolume(
+                    id=str(uuid5(_FAKE_NAMESPACE, f"{instance.id}:volume")),
+                    device="/dev/vda",
+                )
+            ]
+        )
         return InstanceDetail(
             **instance.model_dump(),
             volumes=volumes,
             openstack_request_id=self._request_id(),
+        )
+
+    async def list_images(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        visibility: ImageVisibility | None,
+    ) -> ProvisioningListResult:
+        self._require_project_scope(auth_context, project_id, region)
+        items = list(self._images(project_id))
+        if name is not None:
+            items = [
+                item for item in items if item.name and name.casefold() in item.name.casefold()
+            ]
+        if visibility is not None:
+            items = [item for item in items if item.visibility is visibility]
+        return self._page_resources(items, limit, marker)
+
+    async def list_flavors(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        self._require_project_scope(auth_context, project_id, region)
+        items = list(self._flavors(project_id))
+        return self._page_resources(items, limit, marker)
+
+    async def list_keypairs(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        self._require_project_scope(auth_context, project_id, region)
+        items = list(self._keypairs(project_id))
+        return self._page_resources(items, limit, marker)
+
+    async def list_networks(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+        status: str | None,
+    ) -> ProvisioningListResult:
+        self._require_project_scope(auth_context, project_id, region)
+        items = list(self._networks(project_id))
+        if name is not None:
+            items = [
+                item for item in items if item.name and name.casefold() in item.name.casefold()
+            ]
+        if status is not None:
+            items = [item for item in items if item.status == status]
+        return self._page_resources(items, limit, marker)
+
+    async def list_security_groups(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        limit: int,
+        marker: str | None,
+        name: str | None,
+    ) -> ProvisioningListResult:
+        self._require_project_scope(auth_context, project_id, region)
+        items = list(self._security_groups(project_id))
+        if name is not None:
+            items = [
+                item for item in items if item.name and name.casefold() in item.name.casefold()
+            ]
+        return self._page_resources(items, limit, marker)
+
+    def _page_resources(
+        self,
+        items: Sequence[Image | Flavor | KeyPair | Network | SecurityGroup],
+        limit: int,
+        marker: str | None,
+    ) -> ProvisioningListResult:
+        start = 0
+        if marker is not None:
+            marker_index = next(
+                (
+                    index
+                    for index, item in enumerate(items)
+                    if str(getattr(item, "id", getattr(item, "name", ""))) == marker
+                ),
+                None,
+            )
+            if marker_index is None:
+                raise AdapterError(status_code=400, request_id=self._request_id())
+            start = marker_index + 1
+        end = start + limit
+        return ProvisioningListResult(
+            items=tuple(items[start:end]),
+            has_next=end < len(items),
+            openstack_request_id=self._request_id(),
+        )
+
+    def _images(self, project_id: str) -> tuple[Image, ...]:
+        label = project_id.removeprefix("project-")
+        return tuple(
+            Image(
+                id=uuid5(_FAKE_NAMESPACE, f"{project_id}:image:{index}"),
+                name=None if index == 30 else f"{label}-image-{index + 1:02d}",
+                status=None if index == 30 else "active",
+                visibility=(ImageVisibility.PRIVATE if index % 2 else ImageVisibility.PUBLIC),
+                disk_format=None if index == 30 else "qcow2",
+                container_format=None if index == 30 else "bare",
+                size_bytes=None if index == 30 else (index + 1) * 1024 * 1024,
+                min_disk_gib=None if index == 30 else index % 4,
+                min_ram_mib=None if index == 30 else 512,
+                created_at=None
+                if index == 30
+                else datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+            )
+            for index in range(31)
+        )
+
+    def _flavors(self, project_id: str) -> tuple[Flavor, ...]:
+        return tuple(
+            Flavor(
+                id=str(uuid5(_FAKE_NAMESPACE, f"{project_id}:flavor:{index}")),
+                name=None if index == 30 else f"m1.fake-{index + 1:02d}",
+                vcpus=None if index == 30 else 1 + index % 8,
+                ram_mib=None if index == 30 else 1024 * (1 + index % 8),
+                disk_gib=None if index == 30 else 10 + index,
+                ephemeral_gib=None if index == 30 else 0,
+                is_public=None if index == 30 else index % 2 == 0,
+            )
+            for index in range(31)
+        )
+
+    def _keypairs(self, project_id: str) -> tuple[KeyPair, ...]:
+        return tuple(
+            KeyPair(
+                name=f"{project_id.removeprefix('project-')}-key-{index + 1:02d}",
+                type=None if index == 30 else KeyPairType.SSH,
+                fingerprint=None if index == 30 else f"SHA256:fake{index:02d}",
+                public_key_preview=None if index == 30 else "ssh-rsa AAAAB3NzaC1yc2EAAAADAQAB...",
+                created_at=None
+                if index == 30
+                else datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+                last_used_at=None,
+            )
+            for index in range(31)
+        )
+
+    def _networks(self, project_id: str) -> tuple[Network, ...]:
+        label = project_id.removeprefix("project-")
+        return tuple(
+            Network(
+                id=uuid5(_FAKE_NAMESPACE, f"{project_id}:network:{index}"),
+                name=None if index == 30 else f"{label}-network-{index + 1:02d}",
+                status=None if index == 30 else ("ACTIVE" if index % 2 == 0 else "DOWN"),
+                shared=None if index == 30 else False,
+                external=None if index == 30 else index == 0,
+                mtu=None if index == 30 else 1500,
+                subnet_count=None if index == 30 else 1,
+            )
+            for index in range(31)
+        )
+
+    def _security_groups(self, project_id: str) -> tuple[SecurityGroup, ...]:
+        label = project_id.removeprefix("project-")
+        return tuple(
+            SecurityGroup(
+                id=uuid5(_FAKE_NAMESPACE, f"{project_id}:security-group:{index}"),
+                name=None if index == 30 else f"{label}-sg-{index + 1:02d}",
+                description=None if index == 30 else f"Fake security group {index + 1}",
+                rule_count=None if index == 30 else index % 5,
+                revision_number=None if index == 30 else index,
+            )
+            for index in range(31)
         )
 
     def _require_project_scope(
@@ -193,10 +393,7 @@ class FakeOpenStackAdapter:
         project_id: str,
         region: str,
     ) -> None:
-        if (
-            auth_context.get("project_id") != project_id
-            or auth_context.get("region") != region
-        ):
+        if auth_context.get("project_id") != project_id or auth_context.get("region") != region:
             raise AdapterError(status_code=401, request_id=self._request_id())
 
     def _instances(self, project_id: str) -> tuple[Instance, ...]:
@@ -242,11 +439,14 @@ class FakeOpenStackAdapter:
         if sort is InstanceSort.CREATED_AT:
             present = [instance for instance in instances if instance.created_at is not None]
             missing = [instance for instance in instances if instance.created_at is None]
-            return sorted(
-                present,
-                key=lambda item: cast(datetime, item.created_at),
-                reverse=reverse,
-            ) + missing
+            return (
+                sorted(
+                    present,
+                    key=lambda item: cast(datetime, item.created_at),
+                    reverse=reverse,
+                )
+                + missing
+            )
         if sort is InstanceSort.NAME:
             named = [instance for instance in instances if instance.name is not None]
             unnamed = [instance for instance in instances if instance.name is None]
