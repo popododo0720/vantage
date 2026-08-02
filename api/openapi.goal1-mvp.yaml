@@ -299,10 +299,12 @@ paths:
           in: query
           schema:
             type: string
+            maxLength: 64
         - name: image_id
           in: query
           schema:
             type: string
+            maxLength: 255
         - name: sort
           in: query
           schema:
@@ -326,6 +328,18 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
     post:
       tags: [Instances]
       summary: Create one or more instances in the active project
@@ -370,6 +384,16 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
     patch:
       tags: [Instances]
       summary: Update permitted instance properties
@@ -1201,6 +1225,12 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    GatewayTimeout:
+      description: An OpenStack service exceeded the bounded deadline
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     InvalidRequest:
       description: Request schema or query validation failed
       content:
@@ -1609,20 +1639,30 @@ components:
           type: string
           format: uuid
         name:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
         status:
           type: string
         created_at:
-          type: string
-          format: date-time
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
         flavor:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
         image:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
         addresses:
-          type: array
-          items:
-            type: string
+          anyOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
     InstancePage:
       type: object
       additionalProperties: false
@@ -1635,22 +1675,57 @@ components:
         page:
           $ref: "#/components/schemas/PageInfo"
     InstanceDetail:
-      allOf:
-        - $ref: "#/components/schemas/Instance"
-        - type: object
-          properties:
-            volumes:
-              type: array
+      type: object
+      additionalProperties: false
+      required: [id, name, status, created_at, volumes]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+        status:
+          type: string
+        created_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        flavor:
+          anyOf:
+            - type: string
+            - type: "null"
+        image:
+          anyOf:
+            - type: string
+            - type: "null"
+        addresses:
+          anyOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+        volumes:
+          anyOf:
+            - type: array
               items:
                 type: object
+                additionalProperties: false
                 required: [id]
                 properties:
                   id:
                     type: string
                   device:
-                    type: string
-            openstack_request_id:
-              type: string
+                    anyOf:
+                      - type: string
+                      - type: "null"
+            - type: "null"
+        openstack_request_id:
+          anyOf:
+            - type: string
+            - type: "null"
     DeleteDependency:
       type: object
       additionalProperties: false

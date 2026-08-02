@@ -1,4 +1,6 @@
+import asyncio
 from datetime import UTC, datetime
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 
@@ -101,7 +103,7 @@ def test_adapter_passes_authentication_connection_boundaries(
         "interface": "internal",
         "api_timeout": 15,
         "app_name": "vantage",
-        "app_version": "0.2.0",
+        "app_version": "0.3.0",
     }]
 
 
@@ -132,7 +134,7 @@ def test_adapter_passes_project_scope_connection_boundaries(
         "interface": "public",
         "api_timeout": 12,
         "app_name": "vantage",
-        "app_version": "0.2.0",
+        "app_version": "0.3.0",
     }]
 
 
@@ -147,3 +149,105 @@ def test_failure_translation_uses_request_id_response_header() -> None:
 
     assert translated.status_code == 404
     assert translated.request_id == "req-from-header"
+
+
+@pytest.mark.parametrize("termination", ["cancel", "timeout"])
+@pytest.mark.asyncio
+async def test_cancelled_sdk_call_holds_capacity_until_thread_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    termination: str,
+) -> None:
+    first_started = Event()
+    second_started = Event()
+    release_first = Event()
+
+    def fake_authenticate(username: str, password: str, domain: str) -> str:
+        del password, domain
+        if username == "first":
+            first_started.set()
+            release_first.wait(timeout=2)
+        else:
+            second_started.set()
+        return username
+
+    adapter = OpenStackSdkAdapter(
+        "https://keystone.example/v3",
+        "internal",
+        "RegionOne",
+        15,
+        thread_capacity=1,
+    )
+    monkeypatch.setattr(adapter, "_authenticate", fake_authenticate)
+
+    first = asyncio.create_task(adapter.authenticate("first", "secret", "default"))
+    for _ in range(100):
+        if first_started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert first_started.is_set()
+
+    if termination == "cancel":
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+    else:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(first, timeout=0.01)
+
+    second = asyncio.create_task(adapter.authenticate("second", "secret", "default"))
+    await asyncio.sleep(0.05)
+    assert second_started.is_set() is False
+
+    release_first.set()
+    assert await asyncio.wait_for(second, timeout=1) == "second"
+    assert second_started.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_calls_cancelled_while_sdk_capacity_is_full_are_not_submitted_later(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_started = Event()
+    release_first = Event()
+    started: list[str] = []
+
+    def fake_authenticate(username: str, password: str, domain: str) -> str:
+        del password, domain
+        started.append(username)
+        if username == "first":
+            first_started.set()
+            release_first.wait(timeout=2)
+        return username
+
+    adapter = OpenStackSdkAdapter(
+        "https://keystone.example/v3",
+        "internal",
+        "RegionOne",
+        15,
+        thread_capacity=1,
+    )
+    monkeypatch.setattr(adapter, "_authenticate", fake_authenticate)
+
+    first = asyncio.create_task(adapter.authenticate("first", "secret", "default"))
+    for _ in range(100):
+        if first_started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert first_started.is_set()
+
+    queued = [
+        asyncio.create_task(
+            asyncio.wait_for(
+                adapter.authenticate(f"queued-{index}", "secret", "default"),
+                timeout=0.02,
+            )
+        )
+        for index in range(3)
+    ]
+    results = await asyncio.gather(*queued, return_exceptions=True)
+    assert all(isinstance(result, TimeoutError) for result in results)
+
+    release_first.set()
+    assert await asyncio.wait_for(first, timeout=1) == "first"
+    await asyncio.sleep(0.05)
+    assert started == ["first"]

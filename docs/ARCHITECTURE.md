@@ -99,6 +99,9 @@ token. Credentials exist only for the Keystone authentication exchange.
   deployment-specific UI branches.
 - Preserve upstream request IDs and normalize service-specific errors into the
   BFF problem contract.
+- Run blocking SDK calls behind a configured capacity bound. Cancellation of
+  the browser-facing request does not release capacity until the underlying
+  SDK thread finishes, preventing stalled upstream calls from accumulating.
 - Keep Neutron and Cinder backend details out of browser-facing schemas.
 
 ### Operation Coordinator
@@ -174,6 +177,9 @@ check alone.
 - Goal 1 targets the initial usable project MVP defined in the planned OpenAPI.
 - Goal 1.1 implements the session and explicit-scope boundary; Goal 1.3 adds
   bounded Nova, Neutron, and Cinder quota aggregation with partial results.
+- Goal 1.4 adds project-scoped Nova inventory and details. Its stable scope
+  namespace survives locale-only session rotation, while project switch,
+  logout, and upstream authentication failure invalidate cursor chains.
 - Goal 2 expands full project networking.
 - Goal 3 expands project storage depth.
 - Goal 4 enables administrator and Identity workflows.

@@ -1,7 +1,11 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ApiError, api } from './api'
+import { DEFAULT_INSTANCE_QUERY, instancePath, parseInstanceRoute } from './instance-route'
+import { InstancesPage } from './InstancesPage'
+import { Pagination } from './Pagination'
 import type {
+  InstanceQuery,
   ProjectOverview,
   ProjectPage,
   Quota,
@@ -22,6 +26,14 @@ type State =
   | { kind: 'projects'; session: Session; error?: ErrorInfo }
   | { kind: 'overview'; session: Session; error?: ErrorInfo }
   | { kind: 'quotas'; session: Session; filter: QuotaFilter; error?: ErrorInfo }
+  | {
+    kind: 'instances'
+    session: Session
+    query: InstanceQuery
+    selectedId?: string
+    drawerFromList: boolean
+    error?: ErrorInfo
+  }
 type HistoryMode = 'push' | 'replace' | 'none'
 
 const labels = {
@@ -218,11 +230,21 @@ function quotaFilter(value: string | null): QuotaFilter {
   return value === 'compute' || value === 'network' || value === 'storage' ? value : 'all'
 }
 
-function scopedState(session: Session, route = '/overview'): State {
+function scopedState(session: Session, route = '/overview', drawerFromList = false): State {
   if (!session.active_scope) return { kind: 'projects', session }
   const url = new URL(route, window.location.origin)
   if (url.pathname === '/quotas') {
     return { kind: 'quotas', session, filter: quotaFilter(url.searchParams.get('service')) }
+  }
+  const instanceRoute = parseInstanceRoute(url.href)
+  if (instanceRoute) {
+    return {
+      kind: 'instances',
+      session,
+      query: instanceRoute.query,
+      selectedId: instanceRoute.instanceId,
+      drawerFromList: Boolean(instanceRoute.instanceId && drawerFromList),
+    }
   }
   return { kind: 'overview', session }
 }
@@ -235,6 +257,7 @@ function pathForState(state: State): string {
   if (state.kind === 'quotas') {
     return state.filter === 'all' ? '/quotas' : `/quotas?service=${state.filter}`
   }
+  if (state.kind === 'instances') return instancePath(state.query, state.selectedId)
   return window.location.pathname
 }
 
@@ -242,6 +265,8 @@ function safeReturnUrl(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
   const url = new URL(value, window.location.origin)
   if (url.origin !== window.location.origin) return undefined
+  const instanceRoute = parseInstanceRoute(url.href)
+  if (instanceRoute) return instancePath(instanceRoute.query, instanceRoute.instanceId)
   if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
   if (url.pathname === '/quotas' && url.searchParams.has('service')) {
     const service = url.searchParams.get('service')
@@ -254,8 +279,18 @@ function currentUrl(): string {
   return `${window.location.pathname}${window.location.search}${window.location.hash}`
 }
 
+function preservesInstanceBackground(current: State, next: State): boolean {
+  return current.kind === 'instances'
+    && next.kind === 'instances'
+    && Boolean(current.selectedId || next.selectedId)
+    && instancePath(current.query) === instancePath(next.query)
+}
+
 function sessionForState(state: State): Session | undefined {
-  return state.kind === 'projects' || state.kind === 'overview' || state.kind === 'quotas'
+  return state.kind === 'projects'
+    || state.kind === 'overview'
+    || state.kind === 'quotas'
+    || state.kind === 'instances'
     ? state.session
     : undefined
 }
@@ -287,19 +322,23 @@ export function App() {
   }, [locale])
 
   const transition = useCallback((next: State, mode: HistoryMode = 'push', route?: string) => {
+    const preserveScroll = preservesInstanceBackground(stateRef.current, next)
     stateRef.current = next
     setState(next)
     if (mode === 'none') return
     const path = route ?? pathForState(next)
-    const historyState = pendingSafeRoute.current
-      ? { returnTo: pendingSafeRoute.current }
-      : {}
+    const historyState = {
+      ...(pendingSafeRoute.current ? { returnTo: pendingSafeRoute.current } : {}),
+      ...(next.kind === 'instances' && next.selectedId && next.drawerFromList
+        ? { instanceDrawer: true }
+        : {}),
+    }
     if (currentUrl() === path) {
       window.history.replaceState(historyState, '', path)
       return
     }
     window.history[mode === 'replace' ? 'replaceState' : 'pushState'](historyState, '', path)
-    window.scrollTo({ top: 0, left: 0 })
+    if (!preserveScroll) window.scrollTo({ top: 0, left: 0 })
   }, [])
 
   const enterSession = useCallback((session: Session, mode: HistoryMode = 'replace') => {
@@ -345,6 +384,8 @@ export function App() {
         next = { kind: 'overview', session }
       } else if (window.location.pathname === '/quotas' && session?.active_scope) {
         next = scopedState(session, currentUrl())
+      } else if (parseInstanceRoute(window.location.href) && session?.active_scope) {
+        next = scopedState(session, currentUrl(), Boolean(window.history.state?.instanceDrawer))
       }
       if (next) transition(next, 'none')
       else window.history.replaceState({}, '', pathForState(current))
@@ -367,7 +408,12 @@ export function App() {
   async function changeLocale(next: Locale) {
     const previous = locale
     setLocale(next)
-    if (state.kind !== 'projects' && state.kind !== 'overview' && state.kind !== 'quotas') return
+    if (
+      state.kind !== 'projects'
+      && state.kind !== 'overview'
+      && state.kind !== 'quotas'
+      && state.kind !== 'instances'
+    ) return
     try {
       const session = await api.locale(next)
       transition({ ...state, session }, 'replace')
@@ -440,12 +486,43 @@ export function App() {
       error={state.error}
       view={state.kind}
       filter={state.kind === 'quotas' ? state.filter : 'all'}
+      instanceQuery={state.kind === 'instances' ? state.query : DEFAULT_INSTANCE_QUERY}
+      selectedInstanceId={state.kind === 'instances' ? state.selectedId : undefined}
       onNavigate={(view, filter = 'all') => {
         if (view === 'quotas') transition({ kind: 'quotas', session: state.session, filter })
-        else transition({ kind: 'overview', session: state.session })
+        else if (view === 'instances') {
+          transition({
+            kind: 'instances',
+            session: state.session,
+            query: DEFAULT_INSTANCE_QUERY,
+            drawerFromList: false,
+          })
+        } else transition({ kind: 'overview', session: state.session })
+      }}
+      onInstanceQuery={(query, mode) => {
+        if (state.kind !== 'instances') return
+        transition({ ...state, query }, mode)
+      }}
+      onInstanceOpen={(instanceId) => {
+        if (state.kind !== 'instances') return
+        transition({
+          ...state,
+          selectedId: instanceId,
+          drawerFromList: true,
+        }, 'push')
+      }}
+      onInstanceClose={() => {
+        if (state.kind !== 'instances') return
+        if (state.drawerFromList) {
+          window.history.back()
+          return
+        }
+        transition({ ...state, selectedId: undefined, drawerFromList: false }, 'replace')
       }}
       onSwitch={() => {
-        pendingSafeRoute.current = safeReturnUrl(window.location.href) ?? '/overview'
+        pendingSafeRoute.current = state.kind === 'instances'
+          ? instancePath(state.query)
+          : (safeReturnUrl(window.location.href) ?? '/overview')
         transition({ kind: 'projects', session: state.session })
       }}
       onExpired={expire}
@@ -487,72 +564,6 @@ function ErrorNotice({ error, referenceLabel }: { error?: ErrorInfo; referenceLa
       {error.references && (
         <small>{referenceLabel}: {error.references.join(' / ')}</small>
       )}
-    </div>
-  )
-}
-
-function Pagination({
-  t,
-  page,
-  pageSize,
-  onPage,
-  onPageSize,
-}: {
-  t: Labels
-  page?: ProjectPage['page']
-  pageSize: number
-  onPage: (page: number) => void
-  onPageSize: (size: number) => void
-}) {
-  if (!page) return null
-  return (
-    <div className="pagination">
-      <span className="page-range">
-        {page.item_from}-{page.item_to} / {page.total_items ?? '?'}
-      </span>
-      <label className="page-size">
-        <span>{t.rows}</span>
-        <select
-          value={pageSize}
-          onChange={(event) => onPageSize(Number(event.target.value))}
-        >
-          {[10, 25, 50, 100].map((size) => <option key={size}>{size}</option>)}
-        </select>
-      </label>
-      <nav aria-label={t.page}>
-        <button
-          type="button"
-          className="page-button"
-          aria-label={t.previousPage}
-          disabled={!page.has_previous}
-          onClick={() => onPage(page.number - 1)}
-        >
-          {'<'}
-        </button>
-        {page.navigable_pages.map((item, index, items) => (
-          <Fragment key={item}>
-            {index > 0 && item - items[index - 1] > 1 && <span className="page-gap">...</span>}
-            <button
-              type="button"
-              className={item === page.number ? 'page-button current' : 'page-button'}
-              aria-label={`${t.page} ${item}`}
-              aria-current={item === page.number ? 'page' : undefined}
-              onClick={() => onPage(item)}
-            >
-              {item}
-            </button>
-          </Fragment>
-        ))}
-        <button
-          type="button"
-          className="page-button"
-          aria-label={t.nextPage}
-          disabled={!page.has_next}
-          onClick={() => onPage(page.number + 1)}
-        >
-          {'>'}
-        </button>
-      </nav>
     </div>
   )
 }
@@ -755,7 +766,7 @@ function ProjectSelection({
             ))}
           </div>
           <Pagination
-            t={t}
+            labels={t}
             page={pageInfo}
             pageSize={pageSize}
             onPage={(nextPage) => {
@@ -931,7 +942,12 @@ function ProjectWorkspace({
   error,
   view,
   filter,
+  instanceQuery,
+  selectedInstanceId,
   onNavigate,
+  onInstanceQuery,
+  onInstanceOpen,
+  onInstanceClose,
   onSwitch,
   onExpired,
   onLogout,
@@ -941,9 +957,14 @@ function ProjectWorkspace({
   language: ReactNode
   session: Session
   error?: ErrorInfo
-  view: 'overview' | 'quotas'
+  view: 'overview' | 'quotas' | 'instances'
   filter: QuotaFilter
-  onNavigate: (view: 'overview' | 'quotas', filter?: QuotaFilter) => void
+  instanceQuery: InstanceQuery
+  selectedInstanceId?: string
+  onNavigate: (view: 'overview' | 'quotas' | 'instances', filter?: QuotaFilter) => void
+  onInstanceQuery: (query: InstanceQuery, mode: 'push' | 'replace') => void
+  onInstanceOpen: (instanceId: string) => void
+  onInstanceClose: () => void
   onSwitch: () => void
   onExpired: () => void
   onLogout: () => void
@@ -1005,6 +1026,18 @@ function ProjectWorkspace({
         >
           {t.quotas}
         </a>
+        <strong>{t.compute}</strong>
+        <a
+          href="/instances"
+          className={view === 'instances' ? 'selected' : undefined}
+          aria-current={view === 'instances' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('instances')
+          }}
+        >
+          {t.instances}
+        </a>
       </aside>
       <main className="content">
         <ErrorNotice error={message ?? error} referenceLabel={t.requestReference} />
@@ -1016,7 +1049,7 @@ function ProjectWorkspace({
             session={session}
             onExpired={onExpired}
           />
-        ) : (
+        ) : view === 'quotas' ? (
           <QuotaDetailsPage
             key={`${scope.project.id}:${scope.region}:quotas:${filter}`}
             t={t}
@@ -1024,6 +1057,18 @@ function ProjectWorkspace({
             session={session}
             filter={filter}
             onFilter={(next) => onNavigate('quotas', next)}
+            onExpired={onExpired}
+          />
+        ) : (
+          <InstancesPage
+            key={`${scope.project.id}:${scope.region}:instances`}
+            scopeKey={`${scope.project.id}:${scope.region}`}
+            locale={locale}
+            query={instanceQuery}
+            selectedId={selectedInstanceId}
+            onQuery={onInstanceQuery}
+            onOpen={onInstanceOpen}
+            onClose={onInstanceClose}
             onExpired={onExpired}
           />
         )}
