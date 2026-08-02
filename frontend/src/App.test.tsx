@@ -1026,7 +1026,7 @@ describe('session and scope flow', () => {
     fireEvent.click(beta)
     fireEvent.click(screen.getByRole('button', { name: 'Continue to project' }))
 
-    expect(await screen.findByText('Loading instances...')).toBeInTheDocument()
+    await waitFor(() => expect(betaRequests).toHaveLength(2))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByText('web-01')).not.toBeInTheDocument()
     resolveBeta(json(betaPage))
