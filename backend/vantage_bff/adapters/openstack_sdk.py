@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any, cast
 
 from vantage_bff.adapters.base import (
@@ -9,8 +10,27 @@ from vantage_bff.adapters.base import (
     AuthResult,
     ScopeError,
     ScopeResult,
+    normalized_quota,
 )
-from vantage_bff.models import Project, User
+from vantage_bff.models import Project, Quota, QuotaService, QuotaUnit, User
+
+_QUOTA_SPECS: dict[QuotaService, tuple[tuple[str, tuple[str, ...], QuotaUnit], ...]] = {
+    QuotaService.COMPUTE: (
+        ("instances", ("instances",), QuotaUnit.COUNT),
+        ("cores", ("cores",), QuotaUnit.COUNT),
+        ("ram_mib", ("ram", "ram_mib"), QuotaUnit.MIB),
+    ),
+    QuotaService.NETWORK: (
+        ("floating_ips", ("floating_ips", "floatingip"), QuotaUnit.COUNT),
+    ),
+    QuotaService.STORAGE: (
+        ("volumes", ("volumes",), QuotaUnit.COUNT),
+        ("gigabytes", ("gigabytes",), QuotaUnit.GIB),
+        ("snapshots", ("snapshots",), QuotaUnit.COUNT),
+        ("backups", ("backups",), QuotaUnit.COUNT),
+        ("backup_gigabytes", ("backup_gigabytes",), QuotaUnit.GIB),
+    ),
+}
 
 
 class OpenStackSdkAdapter:
@@ -22,11 +42,13 @@ class OpenStackSdkAdapter:
         interface: str,
         default_region: str,
         request_timeout_seconds: int,
+        quota_timeout_seconds: float | None = None,
     ) -> None:
         self.auth_url = auth_url
         self.interface = interface
         self.default_region = default_region
         self.request_timeout_seconds = request_timeout_seconds
+        self.quota_timeout_seconds = quota_timeout_seconds or float(request_timeout_seconds)
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         return await asyncio.to_thread(self._authenticate, username, password, domain)
@@ -43,7 +65,7 @@ class OpenStackSdkAdapter:
                 interface=self.interface,
                 api_timeout=self.request_timeout_seconds,
                 app_name="vantage",
-                app_version="0.1.0",
+                app_version="0.2.0",
             )
             token = connection.authorize()
             user_id = connection.current_user_id
@@ -87,6 +109,17 @@ class OpenStackSdkAdapter:
     ) -> ScopeResult:
         return await asyncio.to_thread(self._scope, auth_context, project_id, region)
 
+    async def quotas(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        service: QuotaService,
+    ) -> tuple[Quota, ...]:
+        return await asyncio.to_thread(
+            self._quotas, auth_context, project_id, region, service
+        )
+
     def _scope(
         self, auth_context: dict[str, Any], project_id: str, region: str
     ) -> ScopeResult:
@@ -102,7 +135,7 @@ class OpenStackSdkAdapter:
                 interface=self.interface,
                 api_timeout=self.request_timeout_seconds,
                 app_name="vantage",
-                app_version="0.1.0",
+                app_version="0.2.0",
             )
             scoped_token = connection.authorize()
             auth_plugin = connection.session.auth
@@ -131,6 +164,114 @@ class OpenStackSdkAdapter:
             )
         except Exception as exc:
             raise _scope_failure(exc) from exc
+
+    def _quotas(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        service: QuotaService,
+    ) -> tuple[Quota, ...]:
+        try:
+            from openstack.connection import Connection
+
+            token = auth_context.get("scoped_token")
+            if not isinstance(token, str) or not token:
+                raise AdapterError(status_code=401)
+            connection = Connection(
+                auth_url=self.auth_url,
+                auth_type="v3token",
+                token=token,
+                project_id=project_id,
+                region_name=region,
+                interface=self.interface,
+                api_timeout=self.quota_timeout_seconds,
+                app_name="vantage",
+                app_version="0.2.0",
+            )
+            if service is QuotaService.COMPUTE:
+                resource = cast(Any, connection.compute).get_quota_set(
+                    project_id, usage=True
+                )
+            elif service is QuotaService.NETWORK:
+                resource = cast(Any, connection.network).get_quota(
+                    project_id, details=True
+                )
+            else:
+                resource = cast(Any, connection.block_storage).get_quota_set(
+                    project_id, usage=True
+                )
+            return _normalize_quota_resource(service, resource)
+        except Exception as exc:
+            raise _quota_failure(exc) from exc
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        result = to_dict()
+        if isinstance(result, Mapping):
+            return result
+    attributes = getattr(value, "__dict__", None)
+    return attributes if isinstance(attributes, Mapping) else {}
+
+
+def _resource_value(resource: Any, aliases: tuple[str, ...]) -> Any:
+    values = _as_mapping(resource)
+    for alias in aliases:
+        if alias in values:
+            return values[alias]
+        value = getattr(resource, alias, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _number(value: Any, names: tuple[str, ...]) -> int | float | None:
+    values = _as_mapping(value)
+    for name in names:
+        candidate = values.get(name, getattr(value, name, None))
+        if isinstance(candidate, bool) or candidate is None:
+            continue
+        if isinstance(candidate, (int, float)):
+            return candidate
+        if isinstance(candidate, str):
+            try:
+                return float(candidate) if "." in candidate else int(candidate)
+            except ValueError:
+                continue
+    return None
+
+
+def _normalize_quota_resource(
+    service: QuotaService, resource: Any
+) -> tuple[Quota, ...]:
+    quotas: list[Quota] = []
+    for name, aliases, unit in _QUOTA_SPECS[service]:
+        raw = _resource_value(resource, aliases)
+        if raw is None:
+            continue
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            limit: int | float | None = raw
+            used: int | float | None = 0
+            reserved: int | float | None = 0
+        else:
+            limit = _number(raw, ("limit",))
+            used = _number(raw, ("in_use", "used"))
+            reserved = _number(raw, ("reserved",))
+        quotas.append(
+            normalized_quota(
+                service=service,
+                resource=name,
+                used=used,
+                reserved=reserved,
+                limit=limit,
+                unit=unit,
+            )
+        )
+    return tuple(quotas)
 
 
 def _status_code(exc: Exception) -> int | None:
@@ -174,3 +315,12 @@ def _scope_failure(exc: Exception) -> ScopeError:
     if status not in {401, 403, 404, 409, 429}:
         status = 503
     return ScopeError(status_code=status, request_id=request_id)
+
+
+def _quota_failure(exc: Exception) -> AdapterError:
+    if isinstance(exc, AdapterError):
+        return AdapterError(status_code=exc.status_code, request_id=exc.request_id)
+    status = _status_code(exc)
+    if status not in {401, 403, 404, 429}:
+        status = 503
+    return AdapterError(status_code=status, request_id=_request_id(exc))

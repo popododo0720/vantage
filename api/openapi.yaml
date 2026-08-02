@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
   title: Vantage BFF API
-  version: 0.1.0
-  summary: Implemented Goal 1.1 session and project-scope API
+  version: 0.2.0
+  summary: Implemented session, project-scope, and quota-overview API
   description: |
     Browser-facing API implemented by the current Vantage runtime. The browser
     never receives an OpenStack token or calls an OpenStack service endpoint
-    directly. The later Goal 1 MVP contract is maintained separately in
-    `openapi.goal1-mvp.yaml` and is not an implemented runtime contract.
+    directly. Operations not yet promoted to this runtime contract remain in
+    the staged `openapi.goal1-mvp.yaml` contract.
 servers:
   - url: /api/v1
 security:
@@ -17,6 +17,10 @@ tags:
     description: Browser session lifecycle backed by Keystone authentication.
   - name: Projects
     description: Accessible projects and the active project scope.
+  - name: Overview
+    description: Quota-first project overview with isolated service failures.
+  - name: Quotas
+    description: Detailed compute, network, and storage quota usage.
 paths:
   /session:
     get:
@@ -181,6 +185,51 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+  /overview:
+    get:
+      tags: [Overview]
+      summary: Get the active project's quota-first overview
+      operationId: getProjectOverview
+      responses:
+        "200":
+          description: Overview with independent service results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectOverview"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /quotas:
+    get:
+      tags: [Quotas]
+      summary: Get detailed quotas for the active project
+      operationId: getProjectQuotas
+      parameters:
+        - name: service
+          in: query
+          description: Return one service group; omit for every quota source.
+          schema:
+            type: string
+            enum: [compute, network, storage]
+      responses:
+        "200":
+          description: Detailed quotas with independent service failures
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaCollection"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
 components:
   headers:
     CsrfToken:
@@ -244,7 +293,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: The requested scope could not be established.
+      description: The active project scope is missing or could not be established.
       content:
         application/problem+json:
           schema:
@@ -430,6 +479,127 @@ components:
             $ref: "#/components/schemas/Project"
         page:
           $ref: "#/components/schemas/PageInfo"
+    Quota:
+      type: object
+      additionalProperties: false
+      required: [service, resource, used, reserved, limit, unit, state]
+      properties:
+        service:
+          type: string
+          enum: [compute, network, storage]
+        resource:
+          type: string
+          enum:
+            - instances
+            - cores
+            - ram_mib
+            - volumes
+            - gigabytes
+            - snapshots
+            - backups
+            - backup_gigabytes
+            - floating_ips
+        used:
+          type: number
+          minimum: 0
+        reserved:
+          type: number
+          minimum: 0
+        limit:
+          anyOf:
+            - type: number
+              minimum: 0
+            - type: "null"
+        unit:
+          type: string
+          enum: [count, MiB, GiB]
+        state:
+          type: string
+          enum: [normal, watch, high, unknown]
+    QuotaCollection:
+      type: object
+      additionalProperties: false
+      required: [scope, generated_at, stale, quotas, partial_errors]
+      properties:
+        scope:
+          $ref: "#/components/schemas/Scope"
+        generated_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+        quotas:
+          type: array
+          items:
+            $ref: "#/components/schemas/Quota"
+        partial_errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/WidgetError"
+    WidgetError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        openstack_request_id:
+          type: string
+    ProjectOverview:
+      type: object
+      additionalProperties: false
+      required:
+        - scope
+        - generated_at
+        - stale
+        - quotas
+        - instance_summary
+        - partial_errors
+      properties:
+        scope:
+          $ref: "#/components/schemas/Scope"
+        generated_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+        quotas:
+          type: array
+          items:
+            $ref: "#/components/schemas/Quota"
+        instance_summary:
+          anyOf:
+            - $ref: "#/components/schemas/InstanceSummary"
+            - type: "null"
+        partial_errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/WidgetError"
+    InstanceSummary:
+      type: object
+      additionalProperties: false
+      required: [total, active, stopped, error]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        active:
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
+        stopped:
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
+        error:
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
     Problem:
       type: object
       additionalProperties: false

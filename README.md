@@ -5,10 +5,11 @@ serves project users and cloud administrators while keeping OpenStack's
 services, resources, policies, and request identifiers visible.
 
 The first delivery is one usable project-user MVP, followed by deliberately
-smaller expansion goals. Each goal must pass on supported reference clouds
-before the next goal is implemented. Penpot carries the later project and
-administrator surfaces now so information architecture can be reviewed without
-committing to a big-bang implementation.
+smaller expansion goals. The complete project, network, storage, and
+administrator console is approved; each slice still has to pass its automated
+and reference-cloud gates before it is released. Penpot carries later surfaces
+ahead of runtime delivery so information architecture can be reviewed without
+a big-bang release.
 
 ## MVP
 
@@ -20,14 +21,16 @@ committing to a big-bang implementation.
 | 4 | Administrator workspace | Identity/RBAC, cross-project compute, quotas, network and storage administration |
 | 5+ | Catalog-driven expansion | Heat, Octavia, Swift, and other discovered services |
 
-Goal 1 is the active delivery target.
+Goal 1 is the active release target. Later goals may be developed in isolated,
+verifiable slices while the preceding release is exercised.
 
-## Goal 1.1 development
+## Goal 1 development
 
-The first runnable slice contains a FastAPI BFF and React/TypeScript browser
-application for login, current session, logout, accessible projects, and
-project/region selection. The default adapter is a credential-free fake; use
-username `alice` (or `limited`) and password `vantage` locally.
+The runnable application contains a FastAPI BFF and React/TypeScript browser
+application for login, current session, logout, accessible projects,
+project/region selection, a quota-first overview, and quota details. The
+default adapter is a credential-free fake; use username `alice` (or `limited`)
+and password `vantage` locally.
 
 ```bash
 uv sync --extra dev
@@ -71,7 +74,8 @@ uv run uvicorn vantage_bff.app:app --app-dir backend
 
 SDK requests use a 15-second default boundary. Set
 `VANTAGE_OS_TIMEOUT_SECONDS` only when the reference cloud requires a different
-measured value.
+measured value. Quota widgets have a shorter independent boundary controlled by
+`VANTAGE_QUOTA_SOURCE_TIMEOUT_SECONDS`, defaulting to 3 seconds.
 
 No credential, password, Keystone token, or service endpoint is committed.
 See [ADR 0001](docs/adr/0001-goal1-runtime-foundation.md) for the runtime and
@@ -127,6 +131,7 @@ server session retains the Keystone membership snapshot used for scope checks.
 - [CLI and API parity contract](docs/CLI-PARITY.md)
 - [MVP planning and design readiness](docs/MVP-READINESS.md)
 - [Penpot design completion audit](docs/DESIGN-QA.md)
+- [Goal 1.3 quota overview verification](docs/GOAL1-3-VERIFICATION.md)
 - [Implemented BFF OpenAPI](api/openapi.yaml)
 - [Planned Goal 1 MVP OpenAPI](api/openapi.goal1-mvp.yaml)
 

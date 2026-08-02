@@ -2,10 +2,12 @@
 
 ## Delivery Rule
 
-Each goal produces a reference-cloud-deployable result. The team observes real
-usage, records latency and failure behavior, and only then implements the next
-goal. Goal 1 is the initial usable MVP. Goals 2-4 expand the same console from
-real use rather than hiding a large launch behind the word MVP.
+The full Horizon/Skyline replacement is the approved product goal. Delivery
+remains incremental: each slice must be deployable and testable before the next
+slice is integrated, while implementation may continue without a new scope
+approval after every goal. Goal 1 is the first usable MVP; Goals 2-4 expand the
+same console until the approved project, network, storage, and administrator
+scope is complete.
 
 ## Goal 1: Initial Usable Project MVP
 
@@ -109,7 +111,8 @@ Done when:
 - Goal 1 resources pass the 2026.1 create/show/set/unset/action/delete parity
   ledger with no unexplained omissions.
 - The MVP is used on the reference cloud for one review cycle.
-- No application work for Goal 2 begins until the user confirms Goal 1.
+- Findings from the review cycle are recorded before Goal 2 is released; Goal 2
+  implementation may proceed in independently verifiable slices.
 
 ## Goal 2: Full Project Networking
 
@@ -165,7 +168,8 @@ Done when:
 
 - Full project Neutron coverage passes reference-cloud policy, conflict,
   performance, and parity checks.
-- Goal 2 is used for one review cycle before Goal 3 starts.
+- Goal 2 is used for one review cycle before Goal 3 is released; Goal 3
+  implementation may proceed in independently verifiable slices.
 
 ## Goal 3: Project Storage Depth
 
@@ -186,7 +190,8 @@ Done when:
 - Cinder resources pass create/show/set/unset/action/delete parity.
 - The same UI contract works on the initial non-Ceph backend and remains
   compatible with a later Ceph/RBD backend.
-- Goal 3 is used for one review cycle before Goal 4 starts.
+- Goal 3 is used for one review cycle before Goal 4 is released; Goal 4
+  implementation may proceed in independently verifiable slices.
 
 ## Goal 4: Administrator and Identity
 

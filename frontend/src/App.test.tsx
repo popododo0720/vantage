@@ -33,6 +33,31 @@ const scopedSession = {
   active_scope: { project: projects[0], region: 'RegionOne' },
 }
 
+const quotas = [
+  { service: 'compute', resource: 'instances', used: 2, reserved: 1, limit: 10, unit: 'count', state: 'normal' },
+  { service: 'compute', resource: 'cores', used: 8, reserved: 2, limit: 20, unit: 'count', state: 'normal' },
+  { service: 'compute', resource: 'ram_mib', used: 10240, reserved: 0, limit: null, unit: 'MiB', state: 'unknown' },
+  { service: 'network', resource: 'floating_ips', used: 5, reserved: 1, limit: 10, unit: 'count', state: 'watch' },
+  { service: 'storage', resource: 'volumes', used: 12, reserved: 0, limit: 20, unit: 'count', state: 'watch' },
+]
+
+const overviewPayload = {
+  scope: scopedSession.active_scope,
+  generated_at: '2026-08-02T01:02:03Z',
+  stale: false,
+  quotas,
+  instance_summary: { total: 2, active: 1, stopped: 1, error: 0 },
+  partial_errors: [],
+}
+
+const quotaPayload = {
+  scope: scopedSession.active_scope,
+  generated_at: '2026-08-02T01:02:03Z',
+  stale: false,
+  quotas,
+  partial_errors: [],
+}
+
 function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' }, ...init })
 }
@@ -40,12 +65,14 @@ function json(body: unknown, init: ResponseInit = {}): Response {
 describe('session and scope flow', () => {
   beforeEach(() => {
     resetCsrfForTest()
+    vi.stubGlobal('scrollTo', vi.fn())
     window.history.replaceState({}, '', '/')
   })
   afterEach(() => {
     cleanup()
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('shows login when no session exists', async () => {
@@ -104,6 +131,7 @@ describe('session and scope flow', () => {
       }))
       .mockResolvedValueOnce(json(projectPage))
       .mockResolvedValueOnce(json(scopedSession))
+      .mockResolvedValueOnce(json(overviewPayload))
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
@@ -150,6 +178,7 @@ describe('session and scope flow', () => {
       .mockResolvedValueOnce(json(session, { headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-value' } }))
       .mockResolvedValueOnce(json(projectPage))
       .mockResolvedValueOnce(json({ ...session, active_scope: { project: projects[0], region: 'RegionOne' } }))
+      .mockResolvedValueOnce(json(overviewPayload))
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
     await screen.findByRole('button', { name: 'Continue to project' })
@@ -251,6 +280,7 @@ describe('session and scope flow', () => {
   it('keeps the active screen visible when sign-out fails', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json(scopedSession))
+      .mockResolvedValueOnce(json(overviewPayload))
       .mockRejectedValueOnce(new TypeError('offline'))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -268,6 +298,7 @@ describe('session and scope flow', () => {
       .mockResolvedValueOnce(json(scopedSession, {
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-value' },
       }))
+      .mockResolvedValueOnce(json(overviewPayload))
       .mockResolvedValueOnce(json(projectPage))
       .mockResolvedValueOnce(json({ ...scopedSession, locale: 'ko' }, {
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'rotated-csrf' },
@@ -277,12 +308,139 @@ describe('session and scope flow', () => {
 
     render(<App />)
     await screen.findByRole('heading', { name: 'Alpha' })
-    fireEvent.click(screen.getByRole('button', { name: /Alpha\s*RegionOne/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Switch project: Alpha, RegionOne' }))
     await screen.findByRole('heading', { name: 'Choose a project' })
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
     fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ko' } })
 
     expect(await screen.findByRole('heading', { name: '프로젝트 선택' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/projects/select')
+  })
+
+  it('renders grouped quotas, unlimited capacity, and localized partial failures', async () => {
+    const overQuota = quotas.map((quota) => (
+      quota.resource === 'cores'
+        ? { ...quota, used: 22, reserved: 3, limit: 20, state: 'high' }
+        : quota
+    ))
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(scopedSession))
+      .mockResolvedValueOnce(json({
+        ...overviewPayload,
+        quotas: overQuota,
+        partial_errors: [{
+          code: 'network_quota_timeout',
+          message: 'Raw backend English must not be primary copy',
+          openstack_request_id: 'req-network-1',
+        }],
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Quota usage' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Compute' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Network' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument()
+    expect(screen.getByText(/Unlimited/)).toBeInTheDocument()
+    expect(screen.getAllByText('10,240 MiB')).toHaveLength(2)
+    expect(screen.getByText('Network quota request timed out.')).toBeInTheDocument()
+    expect(screen.queryByText('Raw backend English must not be primary copy')).not.toBeInTheDocument()
+    expect(screen.getByText(/req-network-1/)).toBeInTheDocument()
+
+    const progress = screen.getByRole('progressbar', { name: /vCPUs/ })
+    expect(progress).toHaveAttribute('aria-valuemax', '20')
+    expect(progress).toHaveAttribute('aria-valuenow', '20')
+    expect(progress.parentElement).toHaveTextContent(/22.*3.*20/)
+  })
+
+  it('navigates and filters quota details without losing the filter on language change', async () => {
+    const computePayload = {
+      ...quotaPayload,
+      quotas: quotas.filter((quota) => quota.service === 'compute'),
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(scopedSession))
+      .mockResolvedValueOnce(json(overviewPayload))
+      .mockResolvedValueOnce(json(quotaPayload))
+      .mockResolvedValueOnce(json(computePayload))
+      .mockResolvedValueOnce(json({ ...scopedSession, locale: 'ko' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Quota usage' })
+    const scrollToMock = vi.mocked(window.scrollTo)
+    scrollToMock.mockClear()
+    fireEvent.click(screen.getByRole('link', { name: 'Quotas' }))
+
+    const table = await screen.findByRole('table', { name: 'Quotas' })
+    expect(window.location.pathname).toBe('/quotas')
+    expect(scrollToMock).toHaveBeenCalledWith({ top: 0, left: 0 })
+    const dataRows = within(table).getAllByRole('row').slice(1)
+    expect(dataRows[0].querySelectorAll('[data-label]')).toHaveLength(6)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Compute' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/quotas?service=compute',
+      expect.any(Object),
+    ))
+    await waitFor(() => expect(screen.queryByText('Floating IPs')).not.toBeInTheDocument())
+    expect(window.location.href).toContain('/quotas?service=compute')
+
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ko' } })
+    expect(await screen.findByRole('tab', { name: '컴퓨트' })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByRole('table', { name: '쿼터' })).toHaveTextContent('인스턴스')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5))
+    expect(screen.queryByText('컴퓨트 쿼터 요청이 일시적으로 제한되었습니다.')).not.toBeInTheDocument()
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/quotas?service=compute')
+  })
+
+  it('merges partial refreshes, marks rejected refreshes stale, and cleans up polling', async () => {
+    let intervalHandler: (() => void) | undefined
+    const setIntervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler, timeout) => {
+      if (timeout === 30_000 && typeof handler === 'function') intervalHandler = handler as () => void
+      return 41
+    })
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval')
+    const partialRefresh = {
+      ...overviewPayload,
+      generated_at: '2026-08-02T01:03:03Z',
+      quotas: [
+        { ...quotas[3], used: 7, reserved: 0 },
+        { ...quotas[4], used: 13 },
+      ],
+      instance_summary: null,
+      partial_errors: [{ code: 'compute_quota_timeout', message: 'compute failed' }],
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(scopedSession))
+      .mockResolvedValueOnce(json(overviewPayload))
+      .mockResolvedValueOnce(json(partialRefresh))
+      .mockRejectedValueOnce(new TypeError('offline'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { unmount } = render(<App />)
+    await screen.findByRole('heading', { name: 'Quota usage' })
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30_000)
+    expect(intervalHandler).toBeTypeOf('function')
+
+    act(() => intervalHandler?.())
+    expect(await screen.findByText('Compute quota request timed out.')).toBeInTheDocument()
+    expect(screen.getByText('Showing the last available data')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Instances' }).closest('article')).toHaveTextContent(/2.*1.*10/)
+    expect(screen.getByRole('heading', { name: 'Floating IPs' }).closest('article')).toHaveTextContent(/7.*10/)
+    expect(screen.getByText('Total instances').nextElementSibling).toHaveTextContent('2')
+
+    act(() => intervalHandler?.())
+    expect(await screen.findByText('Unable to load the project overview')).toBeInTheDocument()
+    expect(screen.getByText('Showing the last available data')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Floating IPs' }).closest('article')).toHaveTextContent(/7.*10/)
+
+    const callsBeforeUnmount = fetchMock.mock.calls.length
+    unmount()
+    expect(clearIntervalSpy).toHaveBeenCalledWith(41)
+    act(() => intervalHandler?.())
+    window.dispatchEvent(new Event('focus'))
+    expect(fetchMock).toHaveBeenCalledTimes(callsBeforeUnmount)
   })
 })

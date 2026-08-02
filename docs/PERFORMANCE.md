@@ -99,4 +99,5 @@ Track:
 - Test normal, Nova-slow, Neutron-error, and Keystone-expired scenarios.
 - Exercise 1k and 10k synthetic collection sizes.
 - Exercise single- and multi-region latency profiles.
-- Do not start the next goal while the current goal exceeds its SLO.
+- Do not release the next goal while the current release exceeds its SLO;
+  isolated implementation and testing may continue.

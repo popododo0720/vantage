@@ -39,3 +39,42 @@ export interface ProjectPage {
     navigable_pages: number[]
   }
 }
+
+export type QuotaService = 'compute' | 'network' | 'storage'
+export type QuotaUnit = 'count' | 'MiB' | 'GiB'
+export type QuotaState = 'normal' | 'watch' | 'high' | 'unknown'
+
+export interface Quota {
+  service: QuotaService
+  resource: string
+  used: number
+  reserved: number
+  limit: number | null
+  unit: QuotaUnit
+  state: QuotaState
+}
+
+export interface WidgetError {
+  code: string
+  message: string
+  openstack_request_id?: string
+}
+
+export interface QuotaPayload {
+  scope: Scope
+  generated_at: string
+  stale: boolean
+  quotas: Quota[]
+  partial_errors: WidgetError[]
+}
+
+export interface InstanceSummary {
+  total: number
+  active: number | null
+  stopped: number | null
+  error: number | null
+}
+
+export interface ProjectOverview extends QuotaPayload {
+  instance_summary: InstanceSummary | null
+}

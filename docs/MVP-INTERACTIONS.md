@@ -1,6 +1,6 @@
 # MVP Mutation Interaction Specification
 
-Status: Goal 1 design-ready, implementation pending user confirmation
+Status: Full staged implementation approved; Goal 1 implementation in progress
 Baseline: OpenStack 2026.1
 Scope: Goal 1 project-user mutations
 
@@ -244,10 +244,9 @@ stateDiagram-v2
 
 ## Promotion Gates
 
-- Goal 1 implementation starts only after the user approves this design and
-  planning package.
+- The approved implementation proceeds in small, verifiable slices.
 - Goal 2 full network management follows Goal 1; Goal 3 storage depth and Goal
-  4 administrator work follow in order.
+  4 administrator work follow in order without another product-scope gate.
 - A Penpot board remains design evidence, not proof that a deployed BFF route
   is available. Navigation and actions are capability and rollout gated.
 

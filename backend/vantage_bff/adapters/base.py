@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
-from vantage_bff.models import Project, User
+from vantage_bff.models import (
+    Project,
+    Quota,
+    QuotaResource,
+    QuotaService,
+    QuotaState,
+    QuotaUnit,
+    User,
+)
 
 
 class AdapterError(Exception):
@@ -46,9 +54,51 @@ class ScopeResult:
     expires_at: datetime | None = None
 
 
+def quota_state(used: int, reserved: int, limit: int | None) -> QuotaState:
+    if limit is None or limit <= 0:
+        return QuotaState.UNKNOWN
+    pressure = (used + reserved) / limit
+    if pressure >= 0.85:
+        return QuotaState.HIGH
+    if pressure >= 0.70:
+        return QuotaState.WATCH
+    return QuotaState.NORMAL
+
+
+def normalized_quota(
+    *,
+    service: QuotaService,
+    resource: str,
+    used: int | float | None,
+    reserved: int | float | None,
+    limit: int | float | None,
+    unit: QuotaUnit,
+) -> Quota:
+    normalized_used = max(0, int(used or 0))
+    normalized_reserved = max(0, int(reserved or 0))
+    normalized_limit = None if limit is None or int(limit) < 0 else int(limit)
+    return Quota(
+        service=service,
+        resource=cast(QuotaResource, resource),
+        used=normalized_used,
+        reserved=normalized_reserved,
+        limit=normalized_limit,
+        unit=unit,
+        state=quota_state(normalized_used, normalized_reserved, normalized_limit),
+    )
+
+
 class OpenStackAdapter(Protocol):
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult: ...
 
     async def scope(
         self, auth_context: dict[str, Any], project_id: str, region: str
     ) -> ScopeResult: ...
+
+    async def quotas(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        service: QuotaService,
+    ) -> tuple[Quota, ...]: ...

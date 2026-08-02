@@ -1,4 +1,11 @@
-import type { Problem, ProjectPage, Session } from './types'
+import type {
+  Problem,
+  ProjectOverview,
+  ProjectPage,
+  QuotaPayload,
+  QuotaService,
+  Session,
+} from './types'
 
 let csrfToken = ''
 const REQUEST_TIMEOUT_MS = 20_000
@@ -85,6 +92,12 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ locale }),
     }),
+  overview: (signal?: AbortSignal) =>
+    request<ProjectOverview>('/overview', { signal }),
+  quotas: (service?: QuotaService, signal?: AbortSignal) => {
+    const query = service ? `?${new URLSearchParams({ service })}` : ''
+    return request<QuotaPayload>(`/quotas${query}`, { signal })
+  },
   logout: async () => {
     await request<void>('/session', { method: 'DELETE' })
     csrfToken = ''

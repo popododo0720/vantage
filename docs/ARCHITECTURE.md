@@ -2,7 +2,7 @@
 
 Status: planning contract
 Baseline: OpenStack 2026.1
-Implementation: Goal 1.1 session and scope foundation
+Implementation: Goal 1.3 quota-first overview
 
 ## Objectives
 
@@ -172,13 +172,14 @@ check alone.
 ## Rollout Boundaries
 
 - Goal 1 targets the initial usable project MVP defined in the planned OpenAPI.
-- Goal 1.1 implements only the session and explicit-scope runtime OpenAPI.
+- Goal 1.1 implements the session and explicit-scope boundary; Goal 1.3 adds
+  bounded Nova, Neutron, and Cinder quota aggregation with partial results.
 - Goal 2 expands full project networking.
 - Goal 3 expands project storage depth.
 - Goal 4 enables administrator and Identity workflows.
 - Goal 5+ adds catalog-discovered services.
 
-A Penpot board or OpenAPI path is a design and contract artifact until its
-implementation, policy tests, performance tests, and reference-cloud checks
-pass. No application implementation begins before this planning package is
-approved.
+A Penpot board or planned OpenAPI path remains a design artifact until its
+runtime implementation, policy tests, performance tests, and reference-cloud
+checks pass. The full staged package is approved; release evidence is still
+required for every promoted operation.
