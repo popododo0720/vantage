@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import math
 import uuid
@@ -22,14 +23,20 @@ from vantage_bff.adapters.fake import FakeOpenStackAdapter
 from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
 from vantage_bff.config import Settings
 from vantage_bff.models import (
+    InstanceSummary,
     LoginRequest,
     PageInfo,
     Problem,
+    ProjectOverview,
     ProjectPage,
+    Quota,
+    QuotaCollection,
+    QuotaService,
     Scope,
     ScopeRequest,
     SessionPreferenceRequest,
     SessionResponse,
+    WidgetError,
 )
 from vantage_bff.rate_limit import LoginRateLimiter
 from vantage_bff.sessions import (
@@ -84,6 +91,7 @@ def _adapter(settings: Settings) -> OpenStackAdapter:
             settings.interface,
             settings.default_region,
             settings.request_timeout_seconds,
+            settings.quota_source_timeout_seconds,
         )
     raise RuntimeError(f"Unsupported adapter: {settings.adapter}")
 
@@ -107,7 +115,7 @@ def create_app(
         )
         yield
 
-    app = FastAPI(title="Vantage BFF", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Vantage BFF", version="0.2.0", lifespan=lifespan)
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -206,6 +214,80 @@ def create_app(
                 403, "csrf_invalid", "Request rejected", "CSRF token is missing or invalid"
             )
         return record
+
+    async def collect_quotas(
+        request: Request,
+        record: SessionRecord,
+        services: tuple[QuotaService, ...],
+    ) -> tuple[list[Quota], list[WidgetError]]:
+        scope = record.active_scope
+        if scope is None:
+            raise ApiError(
+                409,
+                "active_scope_required",
+                "Project scope required",
+                "Select a project and region before requesting project resources",
+            )
+
+        async def load(service: QuotaService) -> tuple[Quota, ...]:
+            return await asyncio.wait_for(
+                request.app.state.adapter.quotas(
+                    record.auth_context,
+                    scope.project.id,
+                    scope.region,
+                    service,
+                ),
+                timeout=active_settings.quota_source_timeout_seconds,
+            )
+
+        results = await asyncio.gather(
+            *(load(service) for service in services),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, AdapterError) and result.status_code == 401:
+                await request.app.state.sessions.delete(record.id)
+                raise ApiError(
+                    401,
+                    "unauthenticated",
+                    "Authentication required",
+                    "Session missing or expired",
+                    openstack_request_id=result.request_id,
+                )
+
+        quotas: list[Quota] = []
+        errors: list[WidgetError] = []
+        for service, result in zip(services, results, strict=True):
+            if not isinstance(result, BaseException):
+                quotas.extend(result)
+                continue
+            request_id = result.request_id if isinstance(result, AdapterError) else None
+            if isinstance(result, TimeoutError):
+                suffix = "timeout"
+                message = f"{service.value.capitalize()} quota data did not respond in time"
+            elif isinstance(result, AdapterError) and result.status_code == 403:
+                suffix = "forbidden"
+                message = (
+                    f"{service.value.capitalize()} quota data is not available for this scope"
+                )
+            elif isinstance(result, AdapterError) and result.status_code == 429:
+                suffix = "rate_limited"
+                message = (
+                    f"{service.value.capitalize()} quota data is temporarily rate limited"
+                )
+            else:
+                suffix = "unavailable"
+                message = (
+                    f"{service.value.capitalize()} quota data is temporarily unavailable"
+                )
+            error = WidgetError(
+                code=f"{service.value}_quota_{suffix}",
+                message=message,
+            )
+            if request_id is not None:
+                error["openstack_request_id"] = request_id
+            errors.append(error)
+        return quotas, errors
 
     @app.post("/api/v1/session/login", response_model=SessionResponse, status_code=201)
     async def login(payload: LoginRequest, request: Request, response: Response) -> SessionResponse:
@@ -445,6 +527,64 @@ def create_app(
         set_session_cookie(response, updated)
         return updated.public()
 
+    @app.get("/api/v1/overview", response_model=ProjectOverview)
+    async def overview(
+        request: Request,
+        record: Annotated[SessionRecord, Depends(current_session)],
+    ) -> ProjectOverview:
+        if record.active_scope is None:
+            raise ApiError(
+                409,
+                "active_scope_required",
+                "Project scope required",
+                "Select a project and region before requesting project resources",
+            )
+        quotas, errors = await collect_quotas(
+            request,
+            record,
+            tuple(QuotaService),
+        )
+        instances = next(
+            (
+                quota
+                for quota in quotas
+                if quota.service is QuotaService.COMPUTE
+                and quota.resource == "instances"
+            ),
+            None,
+        )
+        return ProjectOverview(
+            scope=record.active_scope,
+            generated_at=datetime.now(UTC),
+            quotas=quotas,
+            instance_summary=(
+                InstanceSummary(total=instances.used) if instances is not None else None
+            ),
+            partial_errors=errors,
+        )
+
+    @app.get("/api/v1/quotas", response_model=QuotaCollection)
+    async def quotas(
+        request: Request,
+        record: Annotated[SessionRecord, Depends(current_session)],
+        service: Annotated[QuotaService | None, Query()] = None,
+    ) -> QuotaCollection:
+        if record.active_scope is None:
+            raise ApiError(
+                409,
+                "active_scope_required",
+                "Project scope required",
+                "Select a project and region before requesting project resources",
+            )
+        services = (service,) if service is not None else tuple(QuotaService)
+        items, errors = await collect_quotas(request, record, services)
+        return QuotaCollection(
+            scope=record.active_scope,
+            generated_at=datetime.now(UTC),
+            quotas=items,
+            partial_errors=errors,
+        )
+
     if (frontend_root / "index.html").is_file():
         app.mount(
             "/assets",
@@ -456,6 +596,7 @@ def create_app(
         @app.get("/login", include_in_schema=False)
         @app.get("/projects/select", include_in_schema=False)
         @app.get("/overview", include_in_schema=False)
+        @app.get("/quotas", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")
 

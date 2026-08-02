@@ -4,8 +4,14 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from vantage_bff.adapters.base import AuthenticationError, AuthResult, ScopeError, ScopeResult
-from vantage_bff.models import Project, User
+from vantage_bff.adapters.base import (
+    AuthenticationError,
+    AuthResult,
+    ScopeError,
+    ScopeResult,
+    normalized_quota,
+)
+from vantage_bff.models import Project, Quota, QuotaService, QuotaUnit, User
 
 
 class FakeOpenStackAdapter:
@@ -47,4 +53,42 @@ class FakeOpenStackAdapter:
                 "region": region,
             },
             expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+    async def quotas(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        service: QuotaService,
+    ) -> tuple[Quota, ...]:
+        del auth_context, region
+        multiplier = 1 if project_id == "project-alpha" else 2
+        raw = {
+            QuotaService.COMPUTE: (
+                ("instances", 7 * multiplier, 0, 20, QuotaUnit.COUNT),
+                ("cores", 18 * multiplier, 2, 40, QuotaUnit.COUNT),
+                ("ram_mib", 49152 * multiplier, 0, 98304, QuotaUnit.MIB),
+            ),
+            QuotaService.NETWORK: (
+                ("floating_ips", 3 * multiplier, 0, 10, QuotaUnit.COUNT),
+            ),
+            QuotaService.STORAGE: (
+                ("volumes", 8 * multiplier, 0, 20, QuotaUnit.COUNT),
+                ("gigabytes", 460 * multiplier, 40, 1000, QuotaUnit.GIB),
+                ("snapshots", 4 * multiplier, 0, 20, QuotaUnit.COUNT),
+                ("backups", multiplier, 0, 10, QuotaUnit.COUNT),
+                ("backup_gigabytes", 80 * multiplier, 0, 500, QuotaUnit.GIB),
+            ),
+        }
+        return tuple(
+            normalized_quota(
+                service=service,
+                resource=resource,
+                used=used,
+                reserved=reserved,
+                limit=limit,
+                unit=unit,
+            )
+            for resource, used, reserved, limit, unit in raw[service]
         )

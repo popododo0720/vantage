@@ -212,9 +212,9 @@ file validator reports zero errors.
 
 The implemented runtime contract reports:
 
-- 6 operations with exact path and method parity against the FastAPI runtime;
-- only the session, login, project-list, and explicit-scope routes delivered by
-  Goal 1.1.
+- 8 operations with exact path and method parity against the FastAPI runtime;
+- session, login, project-list, explicit-scope, overview, and quota-detail
+  routes delivered through Goal 1.3.
 
 The separate planned Goal 1 contract reports:
 
@@ -228,16 +228,16 @@ The separate planned Goal 1 contract reports:
   mutations. Session preference, logout, scope selection, and short-lived
   console URL issuance are the documented non-resource exceptions.
 
-Goal 1.1 adds `openapi-spec-validator` to the development dependencies. Both
+Goal 1.1 added `openapi-spec-validator` to the development dependencies. Both
 `api/openapi.yaml` and `api/openapi.goal1-mvp.yaml` are parsed and
 reference-validated locally. The test suite additionally compares every
 published runtime path and method with FastAPI, and CI repeats both checks.
 
 ## Incremental Development Gate
 
-User approval started incremental Goal 1 development. Goal 1.1 and the explicit
-scope foundation are the only implemented runtime boundary in this branch.
-Each later slice must still pass:
+User approval covers the complete staged console. Goal 1.1 established the
+scope foundation and Goal 1.3 promotes quota reads. Each later slice still has
+to pass:
 
 - current OpenAPI parser and reference validation;
 - authentication and cross-project isolation tests;

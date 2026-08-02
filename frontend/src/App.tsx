@@ -1,10 +1,19 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ApiError, api } from './api'
-import type { ProjectPage, Session } from './types'
+import type {
+  ProjectOverview,
+  ProjectPage,
+  Quota,
+  QuotaPayload,
+  QuotaService,
+  Session,
+  WidgetError,
+} from './types'
 import './styles.css'
 
 type Locale = 'en' | 'ko'
+type QuotaFilter = 'all' | QuotaService
 type ErrorInfo = { message: string; references?: string[] }
 type State =
   | { kind: 'loading' }
@@ -12,6 +21,7 @@ type State =
   | { kind: 'reauth'; error: ErrorInfo; returnTo: string }
   | { kind: 'projects'; session: Session; error?: ErrorInfo }
   | { kind: 'overview'; session: Session; error?: ErrorInfo }
+  | { kind: 'quotas'; session: Session; filter: QuotaFilter; error?: ErrorInfo }
 type HistoryMode = 'push' | 'replace' | 'none'
 
 const labels = {
@@ -48,6 +58,65 @@ const labels = {
     nextPage: 'Next page',
     language: 'Language',
     projects: 'Projects',
+    projectNavigation: 'Project navigation',
+    quotas: 'Quotas',
+    overviewDescription: 'Current capacity and workload for this project.',
+    quotasDescription: 'Review service limits and current consumption.',
+    instanceSummary: 'Instance summary',
+    totalInstances: 'Total instances',
+    activeInstances: 'Active',
+    stoppedInstances: 'Stopped',
+    errorInstances: 'Error',
+    statusUnavailable: 'Status breakdown unavailable',
+    quotaUsage: 'Quota usage',
+    compute: 'Compute',
+    network: 'Network',
+    storage: 'Storage',
+    all: 'All',
+    quotaFilters: 'Quota service filters',
+    loadingOverview: 'Loading project capacity...',
+    loadingQuotas: 'Loading quotas...',
+    overviewFailed: 'Unable to load the project overview',
+    quotasFailed: 'Unable to load quotas',
+    noQuotas: 'No quota data is available for this service.',
+    partialData: 'Some service data is unavailable.',
+    quotaTimedOut: 'quota request timed out.',
+    quotaUnavailable: 'quota data is unavailable.',
+    quotaForbidden: 'quota data is not permitted for this project.',
+    quotaRateLimited: 'quota data is temporarily rate limited.',
+    serviceDataUnavailable: 'Service data is currently unavailable.',
+    errorCode: 'Error code',
+    updated: 'Updated',
+    updating: 'Updating in the background...',
+    stale: 'Showing the last available data',
+    unlimited: 'Unlimited',
+    used: 'Used',
+    reserved: 'Reserved',
+    limit: 'Limit',
+    resource: 'Resource',
+    service: 'Service',
+    state: 'State',
+    normal: 'Normal',
+    watch: 'Watch',
+    high: 'High',
+    unknown: 'Unknown',
+    instances: 'Instances',
+    cores: 'vCPUs',
+    ram_mib: 'Memory',
+    volumes: 'Volumes',
+    gigabytes: 'Volume capacity',
+    snapshots: 'Snapshots',
+    backups: 'Backups',
+    backup_gigabytes: 'Backup capacity',
+    floating_ips: 'Floating IPs',
+    networks: 'Networks',
+    ports: 'Ports',
+    routers: 'Routers',
+    security_groups: 'Security groups',
+    security_group_rules: 'Security group rules',
+    load_balancers: 'Load balancers',
+    projectContext: 'Project context',
+    notAvailable: 'Not available',
   },
   ko: {
     signIn: '클라우드 로그인',
@@ -82,12 +151,80 @@ const labels = {
     nextPage: '다음 페이지',
     language: '언어',
     projects: '프로젝트',
+    projectNavigation: '프로젝트 탐색',
+    quotas: '쿼터',
+    overviewDescription: '이 프로젝트의 현재 용량과 워크로드를 확인합니다.',
+    quotasDescription: '서비스별 제한과 현재 사용량을 확인합니다.',
+    instanceSummary: '인스턴스 요약',
+    totalInstances: '전체 인스턴스',
+    activeInstances: '실행 중',
+    stoppedInstances: '정지',
+    errorInstances: '오류',
+    statusUnavailable: '상태별 집계를 사용할 수 없음',
+    quotaUsage: '쿼터 사용량',
+    compute: '컴퓨트',
+    network: '네트워크',
+    storage: '스토리지',
+    all: '전체',
+    quotaFilters: '쿼터 서비스 필터',
+    loadingOverview: '프로젝트 용량을 불러오는 중...',
+    loadingQuotas: '쿼터를 불러오는 중...',
+    overviewFailed: '프로젝트 개요를 불러올 수 없습니다.',
+    quotasFailed: '쿼터를 불러올 수 없습니다.',
+    noQuotas: '이 서비스에서 사용할 수 있는 쿼터 데이터가 없습니다.',
+    partialData: '일부 서비스 데이터를 사용할 수 없습니다.',
+    quotaTimedOut: '쿼터 요청 시간이 초과되었습니다.',
+    quotaUnavailable: '쿼터 데이터를 사용할 수 없습니다.',
+    quotaForbidden: '이 프로젝트에서 쿼터 데이터를 조회할 권한이 없습니다.',
+    quotaRateLimited: '쿼터 요청이 일시적으로 제한되었습니다.',
+    serviceDataUnavailable: '서비스 데이터를 현재 사용할 수 없습니다.',
+    errorCode: '오류 코드',
+    updated: '업데이트',
+    updating: '백그라운드에서 업데이트 중...',
+    stale: '마지막으로 확인된 데이터를 표시 중',
+    unlimited: '무제한',
+    used: '사용',
+    reserved: '예약',
+    limit: '한도',
+    resource: '리소스',
+    service: '서비스',
+    state: '상태',
+    normal: '정상',
+    watch: '주의',
+    high: '높음',
+    unknown: '알 수 없음',
+    instances: '인스턴스',
+    cores: 'vCPU',
+    ram_mib: '메모리',
+    volumes: '볼륨',
+    gigabytes: '볼륨 용량',
+    snapshots: '스냅샷',
+    backups: '백업',
+    backup_gigabytes: '백업 용량',
+    floating_ips: '플로팅 IP',
+    networks: '네트워크',
+    ports: '포트',
+    routers: '라우터',
+    security_groups: '보안 그룹',
+    security_group_rules: '보안 그룹 규칙',
+    load_balancers: '로드 밸런서',
+    projectContext: '프로젝트 범위',
+    notAvailable: '사용할 수 없음',
   },
 }
 type Labels = typeof labels.en
 
-function nextState(session: Session): State {
-  return session.active_scope ? { kind: 'overview', session } : { kind: 'projects', session }
+function quotaFilter(value: string | null): QuotaFilter {
+  return value === 'compute' || value === 'network' || value === 'storage' ? value : 'all'
+}
+
+function scopedState(session: Session, route = '/overview'): State {
+  if (!session.active_scope) return { kind: 'projects', session }
+  const url = new URL(route, window.location.origin)
+  if (url.pathname === '/quotas') {
+    return { kind: 'quotas', session, filter: quotaFilter(url.searchParams.get('service')) }
+  }
+  return { kind: 'overview', session }
 }
 
 function pathForState(state: State): string {
@@ -95,13 +232,21 @@ function pathForState(state: State): string {
   if (state.kind === 'reauth') return state.returnTo
   if (state.kind === 'projects') return '/projects/select'
   if (state.kind === 'overview') return '/overview'
+  if (state.kind === 'quotas') {
+    return state.filter === 'all' ? '/quotas' : `/quotas?service=${state.filter}`
+  }
   return window.location.pathname
 }
 
 function safeReturnUrl(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
   const url = new URL(value, window.location.origin)
-  if (url.origin !== window.location.origin || url.pathname !== '/overview') return undefined
+  if (url.origin !== window.location.origin) return undefined
+  if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
+  if (url.pathname === '/quotas' && url.searchParams.has('service')) {
+    const service = url.searchParams.get('service')
+    if (service !== 'compute' && service !== 'network' && service !== 'storage') return undefined
+  }
   return `${url.pathname}${url.search}${url.hash}`
 }
 
@@ -110,7 +255,9 @@ function currentUrl(): string {
 }
 
 function sessionForState(state: State): Session | undefined {
-  return state.kind === 'projects' || state.kind === 'overview' ? state.session : undefined
+  return state.kind === 'projects' || state.kind === 'overview' || state.kind === 'quotas'
+    ? state.session
+    : undefined
 }
 
 function errorInfo(cause: unknown, fallback: string): ErrorInfo {
@@ -152,11 +299,12 @@ export function App() {
       return
     }
     window.history[mode === 'replace' ? 'replaceState' : 'pushState'](historyState, '', path)
+    window.scrollTo({ top: 0, left: 0 })
   }, [])
 
   const enterSession = useCallback((session: Session, mode: HistoryMode = 'replace') => {
-    const next = nextState(session)
-    const returnTo = next.kind === 'overview' ? pendingSafeRoute.current : undefined
+    const returnTo = session.active_scope ? pendingSafeRoute.current : undefined
+    const next = scopedState(session, returnTo ?? '/overview')
     if (returnTo) pendingSafeRoute.current = undefined
     transition(next, mode, returnTo)
   }, [transition])
@@ -195,6 +343,8 @@ export function App() {
         next = { kind: 'projects', session }
       } else if (window.location.pathname === '/overview' && session?.active_scope) {
         next = { kind: 'overview', session }
+      } else if (window.location.pathname === '/quotas' && session?.active_scope) {
+        next = scopedState(session, currentUrl())
       }
       if (next) transition(next, 'none')
       else window.history.replaceState({}, '', pathForState(current))
@@ -217,10 +367,10 @@ export function App() {
   async function changeLocale(next: Locale) {
     const previous = locale
     setLocale(next)
-    if (state.kind !== 'projects' && state.kind !== 'overview') return
+    if (state.kind !== 'projects' && state.kind !== 'overview' && state.kind !== 'quotas') return
     try {
       const session = await api.locale(next)
-      transition({ kind: state.kind, session }, 'replace')
+      transition({ ...state, session }, 'replace')
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 401) {
         expire()
@@ -275,22 +425,30 @@ export function App() {
         onSession={(session) => {
           const returnTo = pendingSafeRoute.current
           if (returnTo) pendingSafeRoute.current = undefined
-          transition(nextState(session), 'push', returnTo)
+          transition(scopedState(session, returnTo ?? '/overview'), 'push', returnTo)
         }}
         onExpired={expire}
       />
     )
   }
   return (
-    <Overview
+    <ProjectWorkspace
       t={t}
+      locale={locale}
       language={language}
       session={state.session}
       error={state.error}
+      view={state.kind}
+      filter={state.kind === 'quotas' ? state.filter : 'all'}
+      onNavigate={(view, filter = 'all') => {
+        if (view === 'quotas') transition({ kind: 'quotas', session: state.session, filter })
+        else transition({ kind: 'overview', session: state.session })
+      }}
       onSwitch={() => {
         pendingSafeRoute.current = safeReturnUrl(window.location.href) ?? '/overview'
         transition({ kind: 'projects', session: state.session })
       }}
+      onExpired={expire}
       onLogout={() => {
         pendingSafeRoute.current = undefined
         transition({ kind: 'login' }, 'replace')
@@ -625,24 +783,174 @@ function ProjectSelection({
   )
 }
 
-function Overview({
+const REVALIDATE_INTERVAL_MS = 30_000
+const SERVICES: QuotaService[] = ['compute', 'network', 'storage']
+const RESOURCE_LABELS: Record<string, keyof Labels> = {
+  instances: 'instances',
+  cores: 'cores',
+  ram_mib: 'ram_mib',
+  volumes: 'volumes',
+  gigabytes: 'gigabytes',
+  snapshots: 'snapshots',
+  backups: 'backups',
+  backup_gigabytes: 'backup_gigabytes',
+  floating_ips: 'floating_ips',
+  networks: 'networks',
+  ports: 'ports',
+  routers: 'routers',
+  security_groups: 'security_groups',
+  security_group_rules: 'security_group_rules',
+  load_balancers: 'load_balancers',
+}
+
+function isAbort(cause: unknown): boolean {
+  return cause instanceof DOMException && cause.name === 'AbortError'
+}
+
+function serviceFromErrorCode(code: string): QuotaService | undefined {
+  return SERVICES.find((service) => code === service || code.startsWith(`${service}_`))
+}
+
+function reconcileQuotaPayload<T extends QuotaPayload>(previous: T | undefined, next: T): T {
+  if (!previous || next.partial_errors.length === 0) return next
+  const failedServices = new Set(
+    next.partial_errors
+      .map((error) => serviceFromErrorCode(error.code))
+      .filter((service): service is QuotaService => Boolean(service)),
+  )
+  if (failedServices.size === 0) return next
+  const quotas = [
+    ...next.quotas.filter((quota) => !failedServices.has(quota.service)),
+    ...previous.quotas.filter((quota) => failedServices.has(quota.service)),
+  ]
+  const merged = { ...next, quotas, stale: true } as T
+  if (
+    failedServices.has('compute')
+    && 'instance_summary' in previous
+    && 'instance_summary' in next
+  ) {
+    return { ...merged, instance_summary: previous.instance_summary } as T
+  }
+  return merged
+}
+
+function markQuotaPayloadStale<T extends QuotaPayload>(previous: T): T {
+  return previous.stale ? previous : { ...previous, stale: true }
+}
+
+function useBackgroundResource<T>({
+  key,
+  loader,
+  reconcile,
+  staleOnError,
+  fallback,
+  onExpired,
+}: {
+  key: string
+  loader: (signal: AbortSignal) => Promise<T>
+  reconcile?: (previous: T | undefined, next: T) => T
+  staleOnError?: (previous: T) => T
+  fallback: string
+  onExpired: () => void
+}) {
+  const loaderRef = useRef(loader)
+  const reconcileRef = useRef(reconcile)
+  const staleOnErrorRef = useRef(staleOnError)
+  const fallbackRef = useRef(fallback)
+  const dataRef = useRef<T | undefined>(undefined)
+  const [data, setData] = useState<T>()
+  const [loading, setLoading] = useState(true)
+  const [updating, setUpdating] = useState(false)
+  const [failure, setFailure] = useState<ErrorInfo>()
+
+  useEffect(() => {
+    loaderRef.current = loader
+    reconcileRef.current = reconcile
+    staleOnErrorRef.current = staleOnError
+    fallbackRef.current = fallback
+  }, [fallback, loader, reconcile, staleOnError])
+
+  useEffect(() => {
+    let disposed = false
+    let current: AbortController | undefined
+
+    async function refresh() {
+      if (disposed) return
+      current?.abort()
+      const controller = new AbortController()
+      current = controller
+      if (dataRef.current) setUpdating(true)
+      else setLoading(true)
+      setFailure(undefined)
+      try {
+        const next = await loaderRef.current(controller.signal)
+        if (disposed || current !== controller) return
+        const result = reconcileRef.current?.(dataRef.current, next) ?? next
+        dataRef.current = result
+        setData(result)
+      } catch (cause) {
+        if (disposed || current !== controller || isAbort(cause)) return
+        if (cause instanceof ApiError && cause.status === 401) {
+          onExpired()
+          return
+        }
+        if (dataRef.current && staleOnErrorRef.current) {
+          const stale = staleOnErrorRef.current(dataRef.current)
+          dataRef.current = stale
+          setData(stale)
+        }
+        setFailure(errorInfo(cause, fallbackRef.current))
+      } finally {
+        if (!disposed && current === controller) {
+          setLoading(false)
+          setUpdating(false)
+        }
+      }
+    }
+
+    void refresh()
+    const interval = window.setInterval(() => void refresh(), REVALIDATE_INTERVAL_MS)
+    const handleFocus = () => void refresh()
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      disposed = true
+      current?.abort()
+      window.clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [key, onExpired])
+
+  return { data, failure, loading, updating }
+}
+
+function ProjectWorkspace({
   t,
+  locale,
   language,
   session,
   error,
+  view,
+  filter,
+  onNavigate,
   onSwitch,
+  onExpired,
   onLogout,
 }: {
   t: Labels
+  locale: Locale
   language: ReactNode
   session: Session
   error?: ErrorInfo
+  view: 'overview' | 'quotas'
+  filter: QuotaFilter
+  onNavigate: (view: 'overview' | 'quotas', filter?: QuotaFilter) => void
   onSwitch: () => void
+  onExpired: () => void
   onLogout: () => void
 }) {
   const scope = session.active_scope!
   const [pending, setPending] = useState(false)
-  const [message, setMessage] = useState(error)
+  const [message, setMessage] = useState<ErrorInfo>()
 
   async function logout() {
     setPending(true)
@@ -660,7 +968,12 @@ function Overview({
     <div className="app-shell">
       <header>
         <div className="brand"><span>V</span><strong>Vantage</strong></div>
-        <button type="button" className="scope secondary" onClick={onSwitch}>
+        <button
+          type="button"
+          className="scope secondary"
+          aria-label={`${t.switch}: ${scope.project.name}, ${scope.region}`}
+          onClick={onSwitch}
+        >
           <strong>{scope.project.name}</strong><small>{scope.region}</small>
         </button>
         {language}
@@ -668,25 +981,420 @@ function Overview({
           {pending ? t.signingOut : t.logout}
         </button>
       </header>
-      <aside>
-        <strong>Project</strong>
-        <a href="/overview" className="selected" aria-current="page">{t.overview}</a>
+      <aside aria-label={t.projectNavigation}>
+        <strong>{t.projectContext}</strong>
+        <a
+          href="/overview"
+          className={view === 'overview' ? 'selected' : undefined}
+          aria-current={view === 'overview' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('overview')
+          }}
+        >
+          {t.overview}
+        </a>
+        <a
+          href="/quotas"
+          className={view === 'quotas' ? 'selected' : undefined}
+          aria-current={view === 'quotas' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('quotas')
+          }}
+        >
+          {t.quotas}
+        </a>
       </aside>
       <main className="content">
-        <p className="eyebrow compact">PROJECT OVERVIEW</p>
-        <h1>{scope.project.name}</h1>
-        <p className="muted">{t.ready}</p>
-        <ErrorNotice error={message} referenceLabel={t.requestReference} />
-        <section className="foundation">
-          <h2>{t.foundation}</h2>
-          <dl>
-            <div><dt>{t.domain}</dt><dd>{scope.project.domain_id ?? 'Unknown'}</dd></div>
-            <div><dt>{t.region}</dt><dd>{scope.region}</dd></div>
-            <div><dt>{t.expires}</dt><dd>{new Date(session.expires_at).toLocaleString()}</dd></div>
-          </dl>
-          <button type="button" className="secondary switch" onClick={onSwitch}>{t.switch}</button>
-        </section>
+        <ErrorNotice error={message ?? error} referenceLabel={t.requestReference} />
+        {view === 'overview' ? (
+          <OverviewPage
+            key={`${scope.project.id}:${scope.region}:overview`}
+            t={t}
+            locale={locale}
+            session={session}
+            onExpired={onExpired}
+          />
+        ) : (
+          <QuotaDetailsPage
+            key={`${scope.project.id}:${scope.region}:quotas:${filter}`}
+            t={t}
+            locale={locale}
+            session={session}
+            filter={filter}
+            onFilter={(next) => onNavigate('quotas', next)}
+            onExpired={onExpired}
+          />
+        )}
       </main>
     </div>
   )
+}
+
+function OverviewPage({
+  t,
+  locale,
+  session,
+  onExpired,
+}: {
+  t: Labels
+  locale: Locale
+  session: Session
+  onExpired: () => void
+}) {
+  const scope = session.active_scope!
+  const { data, failure, loading, updating } = useBackgroundResource<ProjectOverview>({
+    key: `${scope.project.id}:${scope.region}:overview`,
+    loader: (signal) => api.overview(signal),
+    reconcile: reconcileQuotaPayload,
+    staleOnError: markQuotaPayloadStale,
+    fallback: t.overviewFailed,
+    onExpired,
+  })
+
+  return (
+    <>
+      <PageHeading
+        eyebrow={t.overview}
+        title={scope.project.name}
+        description={t.overviewDescription}
+        data={data}
+        updating={updating}
+        locale={locale}
+        t={t}
+      />
+      <ErrorNotice error={failure} referenceLabel={t.requestReference} />
+      {loading && !data && <LoadingState label={t.loadingOverview} />}
+      {data && (
+        <>
+          <PartialErrors errors={data.partial_errors} t={t} />
+          <InstanceSummaryView summary={data.instance_summary} t={t} locale={locale} />
+          <section className="quota-overview" aria-labelledby="quota-usage-heading">
+            <div className="section-heading">
+              <h2 id="quota-usage-heading">{t.quotaUsage}</h2>
+            </div>
+            {SERVICES.map((service) => (
+              <QuotaGroup
+                key={service}
+                service={service}
+                quotas={data.quotas.filter((quota) => quota.service === service)}
+                t={t}
+                locale={locale}
+              />
+            ))}
+          </section>
+        </>
+      )}
+    </>
+  )
+}
+
+function QuotaDetailsPage({
+  t,
+  locale,
+  session,
+  filter,
+  onFilter,
+  onExpired,
+}: {
+  t: Labels
+  locale: Locale
+  session: Session
+  filter: QuotaFilter
+  onFilter: (filter: QuotaFilter) => void
+  onExpired: () => void
+}) {
+  const scope = session.active_scope!
+  const service = filter === 'all' ? undefined : filter
+  const { data, failure, loading, updating } = useBackgroundResource<QuotaPayload>({
+    key: `${scope.project.id}:${scope.region}:quotas:${filter}`,
+    loader: (signal) => api.quotas(service, signal),
+    reconcile: reconcileQuotaPayload,
+    staleOnError: markQuotaPayloadStale,
+    fallback: t.quotasFailed,
+    onExpired,
+  })
+
+  return (
+    <>
+      <PageHeading
+        eyebrow={t.projectContext}
+        title={t.quotas}
+        description={t.quotasDescription}
+        data={data}
+        updating={updating}
+        locale={locale}
+        t={t}
+      />
+      <div className="segmented" role="tablist" aria-label={t.quotaFilters}>
+        {(['all', ...SERVICES] as QuotaFilter[]).map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="tab"
+            aria-selected={filter === item}
+            className={filter === item ? 'active' : undefined}
+            onClick={() => onFilter(item)}
+          >
+            {filterLabel(item, t)}
+          </button>
+        ))}
+      </div>
+      <ErrorNotice error={failure} referenceLabel={t.requestReference} />
+      {loading && !data && <LoadingState label={t.loadingQuotas} />}
+      {data && (
+        <>
+          <PartialErrors errors={data.partial_errors} t={t} />
+          {data.quotas.length > 0
+            ? <QuotaTable quotas={data.quotas} t={t} locale={locale} />
+            : <p className="empty-state">{t.noQuotas}</p>}
+        </>
+      )}
+    </>
+  )
+}
+
+function PageHeading({
+  eyebrow,
+  title,
+  description,
+  data,
+  updating,
+  locale,
+  t,
+}: {
+  eyebrow: string
+  title: string
+  description: string
+  data?: { generated_at: string; stale: boolean }
+  updating: boolean
+  locale: Locale
+  t: Labels
+}) {
+  return (
+    <div className="page-heading">
+      <div>
+        <p className="eyebrow compact">{eyebrow}</p>
+        <h1>{title}</h1>
+        <p className="muted">{description}</p>
+      </div>
+      <p className={`sync-status${data?.stale ? ' stale' : ''}`} aria-live="polite">
+        {updating
+          ? t.updating
+          : data
+            ? <>{data.stale ? t.stale : t.updated} <time dateTime={data.generated_at}>{formatDate(data.generated_at, locale)}</time></>
+            : null}
+      </p>
+    </div>
+  )
+}
+
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="loading-state" role="status">
+      <span className="loading-line" />
+      <span>{label}</span>
+    </div>
+  )
+}
+
+function PartialErrors({ errors, t }: { errors: WidgetError[]; t: Labels }) {
+  if (errors.length === 0) return null
+  return (
+    <section className="partial-errors" aria-labelledby="partial-errors-heading">
+      <h2 id="partial-errors-heading">{t.partialData}</h2>
+      {errors.map((error, index) => (
+        <div className="partial-error" key={`${error.code}:${error.openstack_request_id ?? index}`}>
+          <span>{localizedPartialError(error, t)}</span>
+          <small>
+            {t.errorCode}: {error.code}
+            {error.openstack_request_id && <> / {t.requestReference}: OpenStack {error.openstack_request_id}</>}
+          </small>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function InstanceSummaryView({
+  summary,
+  t,
+  locale,
+}: {
+  summary: ProjectOverview['instance_summary']
+  t: Labels
+  locale: Locale
+}) {
+  const metrics = [
+    [t.totalInstances, summary?.total],
+    [t.activeInstances, summary?.active],
+    [t.stoppedInstances, summary?.stopped],
+    [t.errorInstances, summary?.error],
+  ] as const
+  return (
+    <section className="instance-summary" aria-labelledby="instance-summary-heading">
+      <div className="section-heading">
+        <h2 id="instance-summary-heading">{t.instanceSummary}</h2>
+        {summary && metrics.slice(1).every(([, value]) => value === null) && (
+          <span>{t.statusUnavailable}</span>
+        )}
+      </div>
+      <dl>
+        {metrics.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value === null || value === undefined ? '—' : formatNumber(value, locale)}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+function QuotaGroup({
+  service,
+  quotas,
+  t,
+  locale,
+}: {
+  service: QuotaService
+  quotas: Quota[]
+  t: Labels
+  locale: Locale
+}) {
+  return (
+    <section className="quota-group" aria-labelledby={`quota-group-${service}`}>
+      <div className="quota-group-heading">
+        <h3 id={`quota-group-${service}`}>{serviceLabel(service, t)}</h3>
+        <span>{quotas.length}</span>
+      </div>
+      {quotas.length > 0 ? (
+        <div className="quota-grid">
+          {quotas.map((quota) => <QuotaCard key={quota.resource} quota={quota} t={t} locale={locale} />)}
+        </div>
+      ) : (
+        <p className="empty-service">{t.noQuotas}</p>
+      )}
+    </section>
+  )
+}
+
+function QuotaCard({ quota, t, locale }: { quota: Quota; t: Labels; locale: Locale }) {
+  const consumed = quota.used + quota.reserved
+  const ariaLimit = quota.limit === null ? undefined : Math.max(0, quota.limit)
+  const ariaValue = ariaLimit === undefined
+    ? undefined
+    : Math.min(ariaLimit, Math.max(0, consumed))
+  const percent = quota.limit === null || quota.limit <= 0
+    ? 0
+    : Math.min(100, Math.max(0, (consumed / quota.limit) * 100))
+  const label = resourceLabel(quota.resource, t)
+  return (
+    <article className={`quota-card state-${quota.state}`}>
+      <div className="quota-title-row">
+        <h4>{label}</h4>
+        <span className="state-label">{stateLabel(quota.state, t)}</span>
+      </div>
+      <p className="quota-total">
+        <strong>{formatQuotaValue(quota.used, quota.unit, locale)}</strong>
+        {quota.reserved > 0 && <span> + {formatQuotaValue(quota.reserved, quota.unit, locale)} {t.reserved.toLowerCase()}</span>}
+        <span> / {quota.limit === null ? t.unlimited : formatQuotaValue(quota.limit, quota.unit, locale)}</span>
+      </p>
+      <div
+        className={`quota-progress state-${quota.state}`}
+        role="progressbar"
+        aria-label={`${label}: ${t.used} ${quota.used}, ${t.reserved} ${quota.reserved}, ${t.limit} ${quota.limit ?? t.unlimited}`}
+        aria-valuemin={ariaLimit === undefined ? undefined : 0}
+        aria-valuemax={ariaLimit}
+        aria-valuenow={ariaValue}
+      >
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <div className="quota-breakdown">
+        <span>{t.used} <strong>{formatQuotaValue(quota.used, quota.unit, locale)}</strong></span>
+        <span>{t.reserved} <strong>{formatQuotaValue(quota.reserved, quota.unit, locale)}</strong></span>
+      </div>
+    </article>
+  )
+}
+
+function QuotaTable({ quotas, t, locale }: { quotas: Quota[]; t: Labels; locale: Locale }) {
+  return (
+    <div className="quota-table" role="table" aria-label={t.quotas}>
+      <div className="quota-table-header" role="row">
+        {[t.resource, t.service, t.used, t.reserved, t.limit, t.state].map((label) => (
+          <span role="columnheader" key={label}>{label}</span>
+        ))}
+      </div>
+      {quotas.map((quota) => (
+        <div className="quota-table-row" role="row" key={`${quota.service}:${quota.resource}`}>
+          <span role="cell" data-label={t.resource}><strong>{resourceLabel(quota.resource, t)}</strong></span>
+          <span role="cell" data-label={t.service}>{serviceLabel(quota.service, t)}</span>
+          <span role="cell" data-label={t.used}>{formatQuotaValue(quota.used, quota.unit, locale)}</span>
+          <span role="cell" data-label={t.reserved}>{formatQuotaValue(quota.reserved, quota.unit, locale)}</span>
+          <span role="cell" data-label={t.limit}>{quota.limit === null ? t.unlimited : formatQuotaValue(quota.limit, quota.unit, locale)}</span>
+          <span role="cell" data-label={t.state} className={`table-state state-${quota.state}`}>
+            {stateLabel(quota.state, t)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function filterLabel(filter: QuotaFilter, t: Labels): string {
+  return filter === 'all' ? t.all : serviceLabel(filter, t)
+}
+
+function localizedPartialError(error: WidgetError, t: Labels): string {
+  const service = serviceFromErrorCode(error.code)
+  const prefix = service ? `${serviceLabel(service, t)} ` : ''
+  if (error.code.includes('timeout')) return `${prefix}${t.quotaTimedOut}`
+  if (
+    error.code.includes('forbidden')
+    || error.code.includes('denied')
+    || error.code.includes('policy')
+  ) {
+    return `${prefix}${t.quotaForbidden}`
+  }
+  if (error.code.includes('rate_limited')) return `${prefix}${t.quotaRateLimited}`
+  if (
+    error.code.includes('unavailable')
+    || error.code.includes('failed')
+    || error.code.includes('error')
+  ) {
+    return `${prefix}${t.quotaUnavailable}`
+  }
+  return service ? `${prefix}${t.quotaUnavailable}` : t.serviceDataUnavailable
+}
+
+function serviceLabel(service: QuotaService, t: Labels): string {
+  return t[service]
+}
+
+function stateLabel(state: Quota['state'], t: Labels): string {
+  return t[state]
+}
+
+function resourceLabel(resource: string, t: Labels): string {
+  const key = RESOURCE_LABELS[resource]
+  if (key) return t[key]
+  return resource.replaceAll('_', ' ').replace(/\b\w/g, (value) => value.toUpperCase())
+}
+
+function formatNumber(value: number, locale: Locale): string {
+  return new Intl.NumberFormat(locale === 'ko' ? 'ko-KR' : 'en-US').format(value)
+}
+
+function formatQuotaValue(value: number, unit: Quota['unit'], locale: Locale): string {
+  const formatted = formatNumber(value, locale)
+  return unit === 'count' ? formatted : `${formatted} ${unit}`
+}
+
+function formatDate(value: string, locale: Locale): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString(locale === 'ko' ? 'ko-KR' : 'en-US')
 }

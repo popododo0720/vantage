@@ -101,7 +101,7 @@ def test_adapter_passes_authentication_connection_boundaries(
         "interface": "internal",
         "api_timeout": 15,
         "app_name": "vantage",
-        "app_version": "0.1.0",
+        "app_version": "0.2.0",
     }]
 
 
@@ -132,7 +132,7 @@ def test_adapter_passes_project_scope_connection_boundaries(
         "interface": "public",
         "api_timeout": 12,
         "app_name": "vantage",
-        "app_version": "0.1.0",
+        "app_version": "0.2.0",
     }]
 
 

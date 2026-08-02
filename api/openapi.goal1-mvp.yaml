@@ -217,6 +217,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /quotas:
     get:
       tags: [Quotas]
@@ -239,6 +241,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /resource-contracts/{resource_type}:
     get:
       tags: [ResourceContracts]
@@ -1186,7 +1190,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: Resource state, revision, or duplicate-operation conflict
+      description: Active scope, resource state, revision, or duplicate-operation conflict
       content:
         application/problem+json:
           schema:
@@ -1484,7 +1488,7 @@ components:
     Quota:
       type: object
       additionalProperties: false
-      required: [service, resource, used, reserved]
+      required: [service, resource, used, reserved, limit, unit, state]
       properties:
         service:
           type: string
@@ -1510,6 +1514,7 @@ components:
         limit:
           anyOf:
             - type: number
+              minimum: 0
             - type: "null"
         unit:
           type: string
@@ -1520,7 +1525,7 @@ components:
     QuotaCollection:
       type: object
       additionalProperties: false
-      required: [scope, generated_at, quotas, partial_errors]
+      required: [scope, generated_at, stale, quotas, partial_errors]
       properties:
         scope:
           $ref: "#/components/schemas/Scope"
@@ -1529,7 +1534,6 @@ components:
           format: date-time
         stale:
           type: boolean
-          default: false
         quotas:
           type: array
           items:
@@ -1552,7 +1556,7 @@ components:
     ProjectOverview:
       type: object
       additionalProperties: false
-      required: [scope, generated_at, quotas, instance_summary, partial_errors]
+      required: [scope, generated_at, stale, quotas, instance_summary, partial_errors]
       properties:
         scope:
           $ref: "#/components/schemas/Scope"
@@ -1561,13 +1565,14 @@ components:
           format: date-time
         stale:
           type: boolean
-          default: false
         quotas:
           type: array
           items:
             $ref: "#/components/schemas/Quota"
         instance_summary:
-          $ref: "#/components/schemas/InstanceSummary"
+          anyOf:
+            - $ref: "#/components/schemas/InstanceSummary"
+            - type: "null"
         partial_errors:
           type: array
           items:
@@ -1581,14 +1586,20 @@ components:
           type: integer
           minimum: 0
         active:
-          type: integer
-          minimum: 0
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
         stopped:
-          type: integer
-          minimum: 0
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
         error:
-          type: integer
-          minimum: 0
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
     Instance:
       type: object
       additionalProperties: false

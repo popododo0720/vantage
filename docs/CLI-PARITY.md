@@ -163,14 +163,15 @@ policy-authorized server-side requests.
 ## Goal 1 Reconciliation Ledger
 
 This is the current design and browser-contract ledger. `Contracted` means the
-field/action is represented in the OpenAPI and interaction design; it does not
-claim that implementation exists. Goal 1 cannot leave planning until every row
-is `Contracted` or has an explicit non-Available state.
+field/action is represented in OpenAPI and interaction design; `Implemented`
+means the runtime and automated tests exist but does not replace reference-cloud
+validation. Goal 1 cannot be released until every row is implemented or has an
+explicit non-Available state.
 
 | Resource | Goal 1 operations | Current state | Evidence |
 | --- | --- | --- | --- |
-| Session and scope | Sign in/out, enumerate scopes, select project/region, expire session | Contracted | `POST/GET/DELETE /session`, `PUT /scope`; Login, Project Selection, Project Switcher |
-| Project quotas | Read Nova, Neutron, and Cinder used/reserved/limit with independent failures | Contracted | `GET /overview`, `GET /quotas`; Project Overview, Quota Details |
+| Session and scope | Sign in/out, enumerate scopes, select project/region, expire session | Implemented | `POST/GET/DELETE /session`, `PUT /scope`; Login, Project Selection, Project Switcher |
+| Project quotas | Read Nova, Neutron, and Cinder used/reserved/limit with independent failures | Implemented | `GET /overview`, `GET /quotas`; Project Overview, Quota Details |
 | Instance | List/show/create, rename, lifecycle actions, resize/confirm/revert, delete preview/delete, noVNC | Contracted | `/instances*`, `/operations*`; Compute Goal 1 boards |
 | Image | Server-filtered project-visible inventory for provisioning | Contracted | `GET /images`; Images board |
 | Flavor | Server-filtered project-allowed inventory for provisioning | Contracted | `GET /flavors`; Create Instance descriptors |

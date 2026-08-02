@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
+from typing import Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -66,6 +68,78 @@ class PageInfo(StrictModel):
 class ProjectPage(StrictModel):
     items: list[Project]
     page: PageInfo
+
+
+class QuotaService(StrEnum):
+    COMPUTE = "compute"
+    NETWORK = "network"
+    STORAGE = "storage"
+
+
+class QuotaUnit(StrEnum):
+    COUNT = "count"
+    MIB = "MiB"
+    GIB = "GiB"
+
+
+class QuotaState(StrEnum):
+    NORMAL = "normal"
+    WATCH = "watch"
+    HIGH = "high"
+    UNKNOWN = "unknown"
+
+
+QuotaResource = Literal[
+    "instances",
+    "cores",
+    "ram_mib",
+    "volumes",
+    "gigabytes",
+    "snapshots",
+    "backups",
+    "backup_gigabytes",
+    "floating_ips",
+]
+
+
+class Quota(StrictModel):
+    service: QuotaService
+    resource: QuotaResource
+    used: int = Field(ge=0)
+    reserved: int = Field(ge=0)
+    limit: int | None = Field(default=None, ge=0)
+    unit: QuotaUnit
+    state: QuotaState
+
+
+class WidgetError(TypedDict):
+    code: str
+    message: str
+    openstack_request_id: NotRequired[str]
+
+
+class InstanceSummary(StrictModel):
+    total: int = Field(ge=0)
+    active: int | None = Field(default=None, ge=0)
+    stopped: int | None = Field(default=None, ge=0)
+    error: int | None = Field(default=None, ge=0)
+
+
+class ProjectOverview(StrictModel):
+    scope: Scope
+    generated_at: datetime
+    stale: bool = False
+    quotas: list[Quota]
+    instance_summary: InstanceSummary | None = None
+    partial_errors: list[WidgetError]
+
+
+class QuotaCollection(StrictModel):
+    scope: Scope
+    generated_at: datetime
+    stale: bool = False
+    quotas: list[Quota]
+    partial_errors: list[WidgetError]
 
 
 class Problem(StrictModel):
