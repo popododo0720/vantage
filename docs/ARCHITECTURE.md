@@ -2,7 +2,7 @@
 
 Status: planning contract
 Baseline: OpenStack 2026.1
-Implementation: not started
+Implementation: Goal 1.1 session and scope foundation
 
 ## Objectives
 
@@ -54,7 +54,11 @@ token. Credentials exist only for the Keystone authentication exchange.
 - Derives user, project, region, catalog, and capability context from the
   server session.
 - Translates list filters and cursors to service-supported server-side
-  parameters. It never fetches a complete collection merely to paginate.
+  parameters. It never fetches a complete mutable service-resource collection
+  merely to paginate. The Keystone user-project membership set is captured at
+  authentication as bounded session authorization context because that endpoint
+  has no portable cursor contract; only filtered, paginated slices reach the
+  browser.
 - Returns view-oriented bounded payloads while preserving OpenStack resource
   terminology and request IDs.
 - Treats OpenStack policy and `403` as authoritative. It never retries with a
@@ -167,7 +171,8 @@ check alone.
 
 ## Rollout Boundaries
 
-- Goal 1 implements the initial usable project MVP defined in the OpenAPI.
+- Goal 1 targets the initial usable project MVP defined in the planned OpenAPI.
+- Goal 1.1 implements only the session and explicit-scope runtime OpenAPI.
 - Goal 2 expands full project networking.
 - Goal 3 expands project storage depth.
 - Goal 4 enables administrator and Identity workflows.

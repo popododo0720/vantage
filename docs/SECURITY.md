@@ -58,7 +58,10 @@ Reference:
 
 - Every list accepts a bounded `limit`.
 - Cursor or marker pagination is used where the upstream service supports it.
-- Filters are translated to upstream server-side filters.
+- Filters are translated to upstream server-side filters where the service
+  supports them. Keystone user-project selection is filtered and paginated in
+  the BFF from the server-session membership snapshot; the browser never
+  receives the complete membership set.
 - Vantage never fetches a complete collection only to slice it in the browser.
 - The browser uses a visible page number and never receives an upstream marker
   or cursor. The BFF keeps a scope- and query-bound short-lived cursor chain.

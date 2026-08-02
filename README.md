@@ -22,6 +22,65 @@ committing to a big-bang implementation.
 
 Goal 1 is the active delivery target.
 
+## Goal 1.1 development
+
+The first runnable slice contains a FastAPI BFF and React/TypeScript browser
+application for login, current session, logout, accessible projects, and
+project/region selection. The default adapter is a credential-free fake; use
+username `alice` (or `limited`) and password `vantage` locally.
+
+```bash
+uv sync --extra dev
+uv run uvicorn vantage_bff.app:app --app-dir backend --reload
+
+cd frontend
+npm ci
+npm run dev
+```
+
+The Vite development server proxies `/api` to the BFF. Because production
+cookies are secure by default, HTTP-only local development must start the BFF
+with `VANTAGE_COOKIE_SECURE=false`. Production must leave the default enabled.
+
+Validation commands:
+
+```bash
+uv run ruff check backend
+uv run mypy backend/vantage_bff
+uv run pytest
+
+cd frontend
+npm run lint
+npm run typecheck
+npm test
+npm run build
+
+cd ..
+uv run openapi-spec-validator api/openapi.yaml
+uv run openapi-spec-validator api/openapi.goal1-mvp.yaml
+```
+
+For a real cloud, install the SDK extra and select the adapter explicitly:
+
+```bash
+uv sync --extra dev --extra openstack
+VANTAGE_ADAPTER=openstack \
+VANTAGE_OS_AUTH_URL=https://keystone.example/v3 \
+uv run uvicorn vantage_bff.app:app --app-dir backend
+```
+
+SDK requests use a 15-second default boundary. Set
+`VANTAGE_OS_TIMEOUT_SECONDS` only when the reference cloud requires a different
+measured value.
+
+No credential, password, Keystone token, or service endpoint is committed.
+See [ADR 0001](docs/adr/0001-goal1-runtime-foundation.md) for the runtime and
+session-store boundaries.
+
+The public session response does not contain the complete accessible-project
+set. Project selection uses the paginated `/api/v1/projects` route; only the
+server session retains the Keystone membership snapshot used for scope checks.
+
 ## Product Scope
 
 - Separate project and administrator workspaces
@@ -68,7 +127,8 @@ Goal 1 is the active delivery target.
 - [CLI and API parity contract](docs/CLI-PARITY.md)
 - [MVP planning and design readiness](docs/MVP-READINESS.md)
 - [Penpot design completion audit](docs/DESIGN-QA.md)
-- [Goal 1 BFF OpenAPI](api/openapi.yaml)
+- [Implemented BFF OpenAPI](api/openapi.yaml)
+- [Planned Goal 1 MVP OpenAPI](api/openapi.goal1-mvp.yaml)
 
 ## Working Surfaces
 

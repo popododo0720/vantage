@@ -5,7 +5,8 @@ Baseline: OpenStack 2026.1
 Scope: Goal 1 project-user mutations
 
 Goal 1 is the initial usable MVP. These designs are part of its browser-facing
-contract and are represented in the Goal 1 OpenAPI.
+contract and are represented in `api/openapi.goal1-mvp.yaml`. The published
+runtime contract contains only operations implemented by the current slice.
 
 ## Shared Boundary
 
