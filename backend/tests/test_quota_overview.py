@@ -337,4 +337,4 @@ def test_sdk_uses_detailed_quota_calls(
 
     assert QuotaConnection.calls == [expected]
     assert QuotaConnection.connection_options[0]["api_timeout"] == 2.5
-    assert QuotaConnection.connection_options[0]["app_version"] == "0.3.0"
+    assert QuotaConnection.connection_options[0]["app_version"] == "0.4.0"

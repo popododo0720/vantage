@@ -75,7 +75,8 @@ Done when:
 
 - A VM can be created without deployment-specific defaults.
 - Public and project resources remain distinguishable.
-- Private key material is shown only once when generated.
+- Public-key import is the 2026.1 default; compatibility-generated private key
+  material is shown only once.
 
 ### Slice 1.6: Lifecycle and Recovery
 

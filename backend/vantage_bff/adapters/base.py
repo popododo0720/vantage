@@ -12,6 +12,7 @@ from vantage_bff.models import (
     InstanceDetail,
     InstanceSort,
     KeyPair,
+    KeyPairType,
     Network,
     Project,
     Quota,
@@ -79,6 +80,18 @@ class InstanceListResult:
 class ProvisioningListResult:
     items: tuple[Image | Flavor | KeyPair | Network | SecurityGroup, ...]
     has_next: bool = False
+    openstack_request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KeyPairCreateResult:
+    keypair: KeyPair
+    private_key: str | None
+    openstack_request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MutationResult:
     openstack_request_id: str | None = None
 
 
@@ -185,6 +198,26 @@ class OpenStackAdapter(Protocol):
         limit: int,
         marker: str | None,
     ) -> ProvisioningListResult: ...
+
+    async def create_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+        key_type: KeyPairType,
+        public_key: str | None,
+    ) -> KeyPairCreateResult: ...
+
+    async def delete_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+    ) -> MutationResult: ...
 
     async def list_networks(
         self,

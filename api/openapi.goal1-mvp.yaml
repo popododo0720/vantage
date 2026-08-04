@@ -34,7 +34,7 @@ tags:
   - name: Flavors
     description: Server-filtered Nova Flavor inventory.
   - name: KeyPairs
-    description: Project keypair inventory and one-time key generation.
+    description: Project key-pair import, compatibility generation, and deletion.
   - name: Networks
     description: Goal 1 Neutron networks, ports, and interface attachments.
   - name: SecurityGroups
@@ -588,21 +588,19 @@ paths:
   /operations/{operation_id}:
     get:
       tags: [Operations]
-      summary: Get asynchronous operation state
+      summary: Get mutation state in the active scope
       operationId: getOperation
       parameters:
         - $ref: "#/components/parameters/OperationId"
       responses:
         "200":
-          description: Current operation state and request correlation
+          description: Current operation state and request correlation.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Operation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /images:
@@ -655,7 +653,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
   /keypairs:
     get:
-      tags: [KeyPairs]
+      tags: [Provisioning Inputs]
       summary: List keypairs in the active project
       operationId: listKeyPairs
       parameters:
@@ -663,7 +661,7 @@ paths:
         - $ref: "#/components/parameters/PageNumber"
       responses:
         "200":
-          description: Paginated keypairs without private material
+          description: A bounded cursor-backed keypair page without private material.
           content:
             application/json:
               schema:
@@ -672,9 +670,21 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
     post:
       tags: [KeyPairs]
-      summary: Generate or import a keypair
+      summary: Import a public key or use Nova compatibility generation
       operationId: createKeyPair
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -687,23 +697,35 @@ paths:
               $ref: "#/components/schemas/CreateKeyPairRequest"
       responses:
         "201":
-          description: Created keypair; generated private material appears once
+          description: Compatibility-generated key pair with one-time private material.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreatedKeyPair"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+        "202":
+          description: Completed or accepted idempotent import operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /keypairs/{keypair_name}:
     delete:
       tags: [KeyPairs]
-      summary: Delete a project keypair
+      summary: Delete a project key pair
       operationId: deleteKeyPair
       parameters:
         - name: keypair_name
@@ -711,17 +733,33 @@ paths:
           required: true
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
         - $ref: "#/components/parameters/CsrfToken"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        "204":
-          description: Keypair deleted
+        "202":
+          description: Completed or accepted idempotent deletion operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /networks:
     get:
       tags: [Networks]
@@ -2106,7 +2144,7 @@ components:
     OperationTarget:
       type: object
       additionalProperties: false
-      required: [resource_type]
+      required: [resource_type, resource_id, resource_name]
       properties:
         resource_type:
           type: string
@@ -2121,7 +2159,16 @@ components:
     Operation:
       type: object
       additionalProperties: false
-      required: [id, kind, status, submitted_at, target]
+      required:
+        - id
+        - kind
+        - status
+        - submitted_at
+        - updated_at
+        - target
+        - trace_id
+        - openstack_request_ids
+        - problem
       properties:
         id:
           type: string
@@ -2333,7 +2380,7 @@ components:
     KeyPair:
       type: object
       additionalProperties: false
-      required: [name, type, fingerprint]
+      required: [name, type, fingerprint, public_key_preview, created_at, last_used_at]
       properties:
         name:
           type: string
@@ -2370,7 +2417,7 @@ components:
     CreateKeyPairRequest:
       type: object
       additionalProperties: false
-      required: [name, type]
+      required: [name]
       properties:
         name:
           type: string
@@ -2380,11 +2427,32 @@ components:
           type: string
           enum: [ssh, x509]
           default: ssh
+        mode:
+          type: string
+          enum: [import, generate]
+          default: import
         public_key:
           anyOf:
             - type: string
+              minLength: 1
+              maxLength: 16384
             - type: "null"
-          description: Null generates a keypair; a value imports public material.
+          description: Required for import and forbidden for compatibility generation.
+      allOf:
+        - if:
+            anyOf:
+              - not: {required: [mode]}
+              - properties: {mode: {const: import}}
+                required: [mode]
+          then:
+            required: [public_key]
+            properties:
+              public_key: {type: string, minLength: 1, maxLength: 16384}
+        - if:
+            properties: {mode: {const: generate}}
+            required: [mode]
+          then:
+            not: {required: [public_key]}
     CreatedKeyPair:
       type: object
       additionalProperties: false
@@ -2393,10 +2461,9 @@ components:
         keypair:
           $ref: "#/components/schemas/KeyPair"
         private_key:
-          anyOf:
-            - type: string
-            - type: "null"
-          description: One-time generated private material; never persisted by Vantage.
+          type: string
+          minLength: 1
+          description: One-time private material; Vantage never persists or logs this value.
     Network:
       type: object
       additionalProperties: false

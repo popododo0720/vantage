@@ -2,9 +2,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { resetCsrfForTest } from './api'
-import type { ImagePage, InstanceDetail, InstancePage, KeyPairPage } from './types'
+import type { ImagePage, InstanceDetail, InstancePage, KeyPairPage, Operation } from './types'
 
 const projects = [{ id: 'project-alpha', name: 'Alpha', enabled: true }]
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 const session = {
   user: { id: 'user-alice', name: 'alice', domain_id: 'default' },
@@ -123,6 +124,18 @@ const keyPairPage: KeyPairPage = {
     number: 1, size: 25, item_from: 1, item_to: 1, total_items: 1, total_pages: 1,
     has_previous: false, has_next: false, navigable_pages: [1],
   },
+}
+
+const acceptedOperation: Operation = {
+  id: '33333333-3333-4333-8333-333333333333',
+  kind: 'keypair.import',
+  status: 'accepted',
+  submitted_at: '2026-08-02T10:00:00Z',
+  updated_at: '2026-08-02T10:00:00Z',
+  target: { resource_type: 'keypair', resource_id: null, resource_name: 'ops-key' },
+  trace_id: 'trace-keypair',
+  openstack_request_ids: ['req-keypair'],
+  problem: null,
 }
 
 function scopedFetch({
@@ -1108,6 +1121,284 @@ describe('session and scope flow', () => {
     expect(await screen.findByRole('heading', { name: '키 페어' })).toBeInTheDocument()
     expect(`${window.location.pathname}${window.location.search}`).toBe(route)
     expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/keypairs?'))).toHaveLength(callsBefore)
+    fireEvent.click(screen.getByRole('button', { name: '가져오기 또는 생성' }))
+    const dialog = await screen.findByRole('dialog', { name: '키 페어 추가' })
+    expect(within(dialog).getByRole('button', { name: '생성' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '가져오기' })).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('키 유형')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }))
+  })
+
+  it('generates a key pair once, blocks duplicate submission, copies or downloads the private key, and refreshes in place', async () => {
+    const route = '/keypairs?limit=10&page=2'
+    const privateMaterial = '-----BEGIN PRIVATE KEY-----\none-time-secret\n-----END PRIVATE KEY-----'
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const createObjectURL = vi.fn().mockReturnValue('blob:private-key')
+    const revokeObjectURL = vi.fn()
+    const clickDownload = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    let listCalls = 0
+    let resolveCreate: ((response: Response) => void) | undefined
+    window.history.replaceState({}, '', route)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    class DownloadURL extends URL {
+      static createObjectURL = createObjectURL
+      static revokeObjectURL = revokeObjectURL
+    }
+    vi.stubGlobal('URL', DownloadURL)
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/v1/session' && method === 'GET') {
+        return Promise.resolve(json(scopedSession, {
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-keypairs' },
+        }))
+      }
+      if (url.startsWith('/api/v1/keypairs?') && method === 'GET') {
+        listCalls += 1
+        return Promise.resolve(json(keyPairPage))
+      }
+      if (url === '/api/v1/keypairs' && method === 'POST') {
+        return new Promise<Response>((resolve) => { resolveCreate = resolve })
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByRole('table', { name: 'Key pairs' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate' }))
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'generated-key' } })
+    const submit = within(dialog).getByRole('button', { name: 'Generate key pair' })
+    fireEvent.click(submit)
+    fireEvent.click(submit)
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1))
+    expect(within(dialog).getByRole('button', { name: 'Generating...' })).toBeDisabled()
+    const createCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    const createOptions = createCall?.[1] as RequestInit
+    const createHeaders = new Headers(createOptions.headers)
+    expect(createHeaders.get('X-CSRF-Token')).toBe('csrf-keypairs')
+    expect(createHeaders.get('Idempotency-Key')).toMatch(UUID_V4)
+    expect(JSON.parse(String(createOptions.body))).toEqual({
+      name: 'generated-key', type: 'ssh', mode: 'generate',
+    })
+
+    await act(async () => {
+      resolveCreate?.(json({ keypair: keyPairPage.items[0], private_key: privateMaterial }, { status: 201 }))
+    })
+    const privateKey = await screen.findByRole('textbox', { name: 'Private key' })
+    expect(privateKey).toHaveValue(privateMaterial)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Copy private key' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(privateMaterial))
+    expect(within(dialog).getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Download private key' }))
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(clickDownload).toHaveBeenCalledOnce()
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:private-key'))
+    await waitFor(() => expect(listCalls).toBe(2))
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('dialog', { name: 'Add a key pair' })).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue(privateMaterial)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
+    const reopened = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    expect(within(reopened).queryByRole('textbox', { name: 'Private key' })).not.toBeInTheDocument()
+  })
+
+  it('imports an X.509 key pair with request references and refreshes the same query', async () => {
+    const route = '/keypairs?limit=50&page=3'
+    let listCalls = 0
+    window.history.replaceState({}, '', route)
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/v1/session' && method === 'GET') {
+        return Promise.resolve(json(scopedSession, {
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-import' },
+        }))
+      }
+      if (url.startsWith('/api/v1/keypairs?') && method === 'GET') {
+        listCalls += 1
+        return Promise.resolve(json(keyPairPage))
+      }
+      if (url === '/api/v1/keypairs' && method === 'POST') {
+        return Promise.resolve(json({
+          ...acceptedOperation,
+          trace_id: 'trace-import',
+          openstack_request_ids: ['req-import'],
+        }, { status: 202 }))
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByRole('table', { name: 'Key pairs' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import' }))
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'client-cert' } })
+    fireEvent.change(within(dialog).getByLabelText('Key type'), { target: { value: 'x509' } })
+    fireEvent.change(within(dialog).getByLabelText('X.509 certificate'), {
+      target: { value: '  -----BEGIN CERTIFICATE-----\ncertificate\n-----END CERTIFICATE-----  ' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import key pair' }))
+
+    expect(await screen.findByText('Key pair import requested.')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Add a key pair' })).not.toBeInTheDocument()
+    const createCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    const createOptions = createCall?.[1] as RequestInit
+    const createHeaders = new Headers(createOptions.headers)
+    expect(createHeaders.get('X-CSRF-Token')).toBe('csrf-import')
+    expect(createHeaders.get('Idempotency-Key')).toMatch(UUID_V4)
+    expect(JSON.parse(String(createOptions.body))).toEqual({
+      name: 'client-cert',
+      type: 'x509',
+      mode: 'import',
+      public_key: '-----BEGIN CERTIFICATE-----\ncertificate\n-----END CERTIFICATE-----',
+    })
+    expect(screen.getByText(/OpenStack req-import/)).toHaveTextContent('Vantage trace-import')
+    await waitFor(() => expect(listCalls).toBe(2))
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+  })
+
+  it('requires the exact name, encodes deletion paths, blocks duplicates, and refreshes in place', async () => {
+    const route = '/keypairs?limit=100&page=2'
+    const keypairName = 'ops/key + cert'
+    const page = { ...keyPairPage, items: [{ ...keyPairPage.items[0], name: keypairName }] }
+    let listCalls = 0
+    let resolveDelete: ((response: Response) => void) | undefined
+    window.history.replaceState({}, '', route)
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/v1/session' && method === 'GET') {
+        return Promise.resolve(json(scopedSession, {
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-delete' },
+        }))
+      }
+      if (url.startsWith('/api/v1/keypairs?') && method === 'GET') {
+        listCalls += 1
+        return Promise.resolve(json(page))
+      }
+      if (method === 'DELETE') return new Promise<Response>((resolve) => { resolveDelete = resolve })
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await screen.findByText(keypairName)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Delete key pair' })
+    const deleteButton = within(dialog).getByRole('button', { name: 'Delete' })
+    expect(deleteButton).toBeDisabled()
+    fireEvent.change(within(dialog).getByLabelText('Type the key pair name to confirm'), {
+      target: { value: 'ops/key' },
+    })
+    expect(deleteButton).toBeDisabled()
+    fireEvent.change(within(dialog).getByLabelText('Type the key pair name to confirm'), {
+      target: { value: keypairName },
+    })
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+    fireEvent.click(deleteButton)
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(1))
+    const deleteCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'DELETE')
+    expect(String(deleteCall?.[0])).toBe(`/api/v1/keypairs/${encodeURIComponent(keypairName)}`)
+    const deleteHeaders = new Headers((deleteCall?.[1] as RequestInit).headers)
+    expect(deleteHeaders.get('X-CSRF-Token')).toBe('csrf-delete')
+    expect(deleteHeaders.get('Idempotency-Key')).toMatch(UUID_V4)
+
+    await act(async () => {
+      resolveDelete?.(json({
+        ...acceptedOperation,
+        kind: 'keypair.delete',
+        trace_id: 'trace-delete',
+        openstack_request_ids: ['req-delete'],
+      }, { status: 202 }))
+    })
+    expect(await screen.findByText('Key pair deletion requested.')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Delete key pair' })).not.toBeInTheDocument()
+    expect(screen.getByText(/OpenStack req-delete/)).toHaveTextContent('Vantage trace-delete')
+    await waitFor(() => expect(listCalls).toBe(2))
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
+  })
+
+  it.each([
+    [403, 'You do not have permission to manage key pairs in this project.'],
+    [404, 'The requested key pair is no longer available.'],
+    [409, 'A key pair with this name already exists, or the request conflicts with its current state.'],
+    [429, 'Too many requests. Wait a moment and try again.'],
+    [503, 'The key pair service is temporarily unavailable. Try again shortly.'],
+  ] as const)('handles a key-pair mutation %s with safe copy and request references', async (status, message) => {
+    let listCalls = 0
+    window.history.replaceState({}, '', '/keypairs')
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/v1/session' && method === 'GET') return Promise.resolve(json(scopedSession))
+      if (url.startsWith('/api/v1/keypairs?') && method === 'GET') {
+        listCalls += 1
+        return Promise.resolve(json(keyPairPage))
+      }
+      if (url === '/api/v1/keypairs' && method === 'POST') return Promise.resolve(json({
+        detail: 'raw upstream detail',
+        code: `mutation_${status}`,
+        trace_id: `trace-${status}`,
+        openstack_request_id: `req-${status}`,
+      }, { status }))
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    }))
+
+    render(<App />)
+    await screen.findByRole('table', { name: 'Key pairs' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate' }))
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'conflicting-key' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate key pair' }))
+
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert).toHaveTextContent(message)
+    expect(alert).toHaveTextContent(`OpenStack req-${status}`)
+    expect(alert).toHaveTextContent(`Vantage trace-${status}`)
+    expect(alert).not.toHaveTextContent('raw upstream detail')
+    expect(within(dialog).getByRole('button', { name: 'Generate key pair' })).toBeEnabled()
+    expect(listCalls).toBe(1)
+  })
+
+  it('recovers login after a key-pair mutation 401 without changing the route', async () => {
+    const route = '/keypairs?limit=50&page=2'
+    window.history.replaceState({}, '', route)
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/v1/session' && method === 'GET') {
+        return Promise.resolve(json(scopedSession, {
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf-expiring' },
+        }))
+      }
+      if (url.startsWith('/api/v1/keypairs?') && method === 'GET') return Promise.resolve(json(keyPairPage))
+      if (url === '/api/v1/keypairs' && method === 'POST') return Promise.resolve(json({
+        detail: 'expired', code: 'unauthenticated', trace_id: 'trace-mutation-auth',
+      }, { status: 401 }))
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    }))
+
+    render(<App />)
+    await screen.findByRole('table', { name: 'Key pairs' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate' }))
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'expired-key' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate key pair' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Session expired' })).toBeInTheDocument()
+    expect(`${window.location.pathname}${window.location.search}`).toBe(route)
   })
 
   it.each(['page_cursor_unavailable', 'page_cursor_changed'])(

@@ -37,10 +37,11 @@ not turn those values into logs, caches, or history records.
 - OpenStack policy is authoritative. A policy `403` becomes a failed operation
   with the upstream request ID; the UI never predicts success from navigation
   visibility or a cached capability descriptor.
-- A generated key pair remains a synchronous one-time-secret response. Private
-  material is never copied into the asynchronous operation store. The client
-  does not automatically retry a generate request after the secret response is
-  lost.
+- Public-key import is the OpenStack 2026.1 default and participates in normal
+  operation replay. Explicit Nova 2.10 compatibility generation remains a
+  synchronous one-time-secret response. Private material is never copied into
+  the operation store, and a replay after successful delivery is rejected
+  instead of generating a duplicate or pretending the secret can be recovered.
 
 ## Store Boundary
 
@@ -59,3 +60,11 @@ The browser only receives operation IDs and never chooses a backing worker.
   BFF workers.
 - Reconciliation after a BFF restart still requires querying the authoritative
   OpenStack resource; an in-memory operation record is not a transaction log.
+
+## Upstream Baseline
+
+Nova's [key-pair API](https://docs.openstack.org/api-ref/compute/#keypairs-keypairs)
+requires `public_key` from microversion 2.92 onward and documents generated
+private material only through 2.91. Vantage therefore keeps import as the
+2026.1 default and labels lower-microversion generation as compatibility
+behavior rather than an ordinary modern create path.
