@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ApiError, api } from './api'
+import { ImageAdminPanel } from './ComputeResources'
 import { Pagination } from './Pagination'
 import type {
   Image,
@@ -272,6 +273,7 @@ export function ImagesPage({ scopeKey, locale, query, onQuery, onExpired }: {
   })
   return <>
     <InventoryHeading eyebrow={t.compute} title={t.images} />
+    <ImageAdminPanel locale={locale} />
     <Filters key={`${query.name}:${query.visibility}`} name={query.name} visibility={query.visibility} t={t}
       onChange={(name, visibility = '') => change({ name, visibility })} />
     <InventoryShell page={data?.value.page} query={query} t={t}

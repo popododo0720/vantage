@@ -101,6 +101,23 @@ export interface ImagePage {
   page: PageInfo
 }
 
+export interface Flavor {
+  id: string
+  name: string | null
+  vcpus: number | null
+  ram_mib: number | null
+  disk_gib: number | null
+  ephemeral_gib?: number | null
+  is_public?: boolean | null
+  description?: string | null
+  extra_specs?: Record<string, string> | null
+}
+
+export interface FlavorPage {
+  items: Flavor[]
+  page: PageInfo
+}
+
 export interface KeyPair {
   name: string
   type: 'ssh' | 'x509' | null
@@ -122,7 +139,53 @@ export interface InstanceVolume {
 
 export interface InstanceDetail extends Instance {
   volumes: InstanceVolume[] | null
+  description?: string | null
+  metadata?: Record<string, string> | null
+  availability_zone?: string | null
+  locked?: boolean | null
   openstack_request_id?: string | null
+}
+
+export interface Operation {
+  id: string
+  kind: string
+  status: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  target: { resource_type: string; resource_id?: string | null; resource_name?: string | null }
+  openstack_request_ids: string[]
+  problem?: { detail: string; openstack_request_id?: string | null } | null
+}
+
+export interface CreateInstancePayload {
+  name: string
+  description?: string
+  count: number
+  flavor_id: string
+  boot_source:
+    | { type: 'image'; image_id: string; create_boot_volume: boolean; volume_size_gib?: number }
+    | { type: 'volume'; volume_id: string; delete_on_termination: boolean }
+  networks: Array<{ network_id?: string; subnet_id?: string; port_id?: string }>
+  security_group_ids: string[]
+  keypair_name?: string
+  availability_zone?: string
+  metadata: Record<string, string>
+  config_drive: boolean
+  user_data?: string
+}
+
+export interface ConsoleSession {
+  instance_id: string
+  type: 'novnc'
+  url: string
+  expires_at: string
+  openstack_request_id?: string | null
+}
+
+export interface DeletePreview {
+  instance_id: string
+  attached_volume_ids: string[]
+  network_contract: string
+  floating_ip_contract: string
+  warning: string
 }
 
 export type QuotaService = 'compute' | 'network' | 'storage'

@@ -14,6 +14,8 @@ export const DEFAULT_KEYPAIR_QUERY: InventoryQuery = {
   page: 1,
 }
 
+export const DEFAULT_FLAVOR_QUERY: InventoryQuery = { limit: 25, page: 1 }
+
 function limit(value: string | null): InventoryQuery['limit'] {
   const parsed = Number(value)
   return PAGE_SIZES.includes(parsed as InventoryQuery['limit'])
@@ -55,6 +57,12 @@ export function parseKeyPairRoute(value: string): InventoryQuery | undefined {
   }
 }
 
+export function parseFlavorRoute(value: string): InventoryQuery | undefined {
+  const url = new URL(value, window.location.origin)
+  if (url.pathname !== '/flavors') return undefined
+  return { limit: limit(url.searchParams.get('limit')), page: page(url.searchParams.get('page')) }
+}
+
 function basePath(query: InventoryQuery): URLSearchParams {
   const search = new URLSearchParams()
   if (query.limit !== 25) search.set('limit', String(query.limit))
@@ -72,4 +80,9 @@ export function imagePath(query: ImageQuery): string {
 export function keyPairPath(query: InventoryQuery): string {
   const search = basePath(query)
   return `/keypairs${search.size ? `?${search}` : ''}`
+}
+
+export function flavorPath(query: InventoryQuery): string {
+  const search = basePath(query)
+  return `/flavors${search.size ? `?${search}` : ''}`
 }

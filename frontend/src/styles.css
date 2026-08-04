@@ -265,3 +265,19 @@ input[aria-invalid="true"] { border-color: #c72b3a; background: #fff7f8; }
   .instance-table-row > span:first-child { grid-column: auto; }
   .instance-details-list > div { grid-template-columns: minmax(0, 1fr); gap: 5px; }
 }
+
+.wizard-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; list-style: none; padding: 0 24px; }
+.wizard-steps li { color: #66717d; font-size: 12px; }
+.wizard-steps li.active { color: #1d5d9b; font-weight: 800; }
+.wizard-fields { display: grid; gap: 16px; padding: 24px; }
+.wizard-fields label { display: grid; gap: 6px; }
+.wizard-fields textarea { min-height: 112px; }
+.wizard-fields .check-field { display: flex; align-items: center; }
+.wizard-review { overflow: auto; padding: 16px; border-radius: 8px; background: #f4f6f8; }
+.wizard-actions { display: flex; justify-content: flex-end; gap: 12px; padding: 16px 24px; }
+.instance-actions { padding: 0 24px 16px; border-bottom: 1px solid #dfe4e8; }
+.instance-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+button.danger { background: #b42318; color: #fff; }
+.resource-admin-panel { margin-bottom: 18px; padding: 16px; border: 1px solid #dfe4e8; border-radius: 10px; background: #fff; }
+.resource-admin-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.resource-admin-form input, .resource-admin-form select { min-width: 150px; }

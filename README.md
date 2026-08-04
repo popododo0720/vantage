@@ -28,9 +28,11 @@ verifiable slices while the preceding release is exercised.
 
 The runnable application contains a FastAPI BFF and React/TypeScript browser
 application for login, current session, logout, accessible projects,
-project/region selection, a quota-first overview, and quota details. The
-default adapter is a credential-free fake; use username `alice` (or `limited`)
-and password `vantage` locally.
+project/region selection, a quota-first overview, quota details, project-scoped
+instance inventory and lifecycle, a create wizard, short-lived noVNC console
+handoff, and policy-authoritative image and flavor administration. The default
+adapter is a credential-free fake; use username `alice` (or `limited`) and
+password `vantage` locally.
 
 ```bash
 uv sync --extra dev
@@ -82,6 +84,9 @@ key-pair, network, and security-group inventory calls use
 Blocking OpenStack SDK work is limited by
 `VANTAGE_OPENSTACK_SDK_THREAD_CAPACITY` (default `8`); timed-out work retains
 its slot until the underlying thread exits.
+Asynchronous compute operations use a separate final-state observation budget,
+`VANTAGE_OPERATION_TIMEOUT_SECONDS` (default `600`), without extending the
+mutation acknowledgement request.
 
 No credential, password, Keystone token, or service endpoint is committed.
 See [ADR 0001](docs/adr/0001-goal1-runtime-foundation.md) for the runtime and
@@ -139,6 +144,7 @@ server session retains the Keystone membership snapshot used for scope checks.
 - [MVP planning and design readiness](docs/MVP-READINESS.md)
 - [Penpot design completion audit](docs/DESIGN-QA.md)
 - [Goal 1.3 quota overview verification](docs/GOAL1-3-VERIFICATION.md)
+- [Compute lifecycle implementation and verification](docs/COMPUTE-LIFECYCLE-VERIFICATION.md)
 - [Implemented BFF OpenAPI](api/openapi.yaml)
 - [Planned Goal 1 MVP OpenAPI](api/openapi.goal1-mvp.yaml)
 

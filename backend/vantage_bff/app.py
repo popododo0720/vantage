@@ -23,6 +23,7 @@ from vantage_bff.adapters.base import (
 )
 from vantage_bff.adapters.fake import FakeOpenStackAdapter
 from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
+from vantage_bff.compute_routes import install_compute_routes
 from vantage_bff.config import Settings
 from vantage_bff.cursors import CursorKey, MemoryCursorStore
 from vantage_bff.models import (
@@ -109,6 +110,7 @@ def _adapter(settings: Settings) -> OpenStackAdapter:
             quota_timeout_seconds=settings.quota_source_timeout_seconds,
             instance_timeout_seconds=settings.instance_source_timeout_seconds,
             provisioning_timeout_seconds=settings.provisioning_source_timeout_seconds,
+            operation_timeout_seconds=settings.operation_timeout_seconds,
             thread_capacity=settings.openstack_sdk_thread_capacity,
         )
     raise RuntimeError(f"Unsupported adapter: {settings.adapter}")
@@ -1298,6 +1300,14 @@ def create_app(
             response.headers["X-OpenStack-Request-ID"] = result.openstack_request_id
         return result
 
+    install_compute_routes(
+        app,
+        current_session=current_session,
+        csrf_session=csrf_session,
+        active_scope=active_scope,
+        error=ApiError,
+    )
+
     if (frontend_root / "index.html").is_file():
         app.mount(
             "/assets",
@@ -1313,6 +1323,7 @@ def create_app(
         @app.get("/instances", include_in_schema=False)
         @app.get("/instances/{instance_id}", include_in_schema=False)
         @app.get("/images", include_in_schema=False)
+        @app.get("/flavors", include_in_schema=False)
         @app.get("/keypairs", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")

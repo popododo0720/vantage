@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, cast
 
+from vantage_bff.compute_models import MutationResult, RemoteConsoleResult
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -208,3 +209,54 @@ class OpenStackAdapter(Protocol):
         marker: str | None,
         name: str | None,
     ) -> ProvisioningListResult: ...
+
+    async def create_instances(
+        self, auth_context: dict[str, Any], project_id: str, region: str, payload: dict[str, Any]
+    ) -> MutationResult: ...
+
+    async def update_instance(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        payload: dict[str, Any],
+    ) -> MutationResult: ...
+
+    async def delete_instance(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> MutationResult: ...
+
+    async def instance_action(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> MutationResult: ...
+
+    async def create_console(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> RemoteConsoleResult: ...
+
+    async def image_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        image_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult: ...
+
+    async def flavor_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        flavor_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult: ...

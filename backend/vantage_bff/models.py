@@ -176,6 +176,10 @@ class InstancePage(StrictModel):
 
 class InstanceDetail(Instance):
     volumes: list[InstanceVolume] | None
+    description: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    metadata: dict[str, str] | None = Field(default=None, exclude_if=lambda value: value is None)
+    availability_zone: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    locked: bool | None = Field(default=None, exclude_if=lambda value: value is None)
     openstack_request_id: str | None
 
 
@@ -197,6 +201,9 @@ class Image(StrictModel):
     min_disk_gib: int | None = Field(default=None, ge=0)
     min_ram_mib: int | None = Field(default=None, ge=0)
     created_at: datetime | None = None
+    protected: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    properties: dict[str, str] | None = Field(default=None, exclude_if=lambda value: value is None)
+    tags: list[str] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ImagePage(StrictModel):
@@ -212,6 +219,8 @@ class Flavor(StrictModel):
     disk_gib: int | None = Field(default=None, ge=0)
     ephemeral_gib: int | None = Field(default=None, ge=0)
     is_public: bool | None = None
+    description: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    extra_specs: dict[str, str] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class FlavorPage(StrictModel):

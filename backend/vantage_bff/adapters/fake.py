@@ -16,6 +16,7 @@ from vantage_bff.adapters.base import (
     ScopeResult,
     normalized_quota,
 )
+from vantage_bff.compute_models import MutationResult, RemoteConsoleResult
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -47,6 +48,11 @@ class FakeOpenStackAdapter:
         Project(id="project-alpha", name="Alpha", domain_id="default", enabled=True),
         Project(id="project-beta", name="Beta", domain_id="default", enabled=True),
     )
+
+    def __init__(self) -> None:
+        self._created: dict[str, list[Instance]] = {}
+        self._deleted: set[UUID] = set()
+        self._instance_updates: dict[UUID, dict[str, Any]] = {}
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         if password != "vantage":
@@ -175,6 +181,7 @@ class FakeOpenStackAdapter:
         region: str,
         instance_id: str,
     ) -> InstanceDetail:
+        self._ensure_state()
         self._require_project_scope(auth_context, project_id, region)
         instance = next(
             (item for item in self._instances(project_id) if str(item.id) == instance_id),
@@ -192,9 +199,150 @@ class FakeOpenStackAdapter:
                 )
             ]
         )
+        updates = self._instance_updates.get(instance.id, {})
         return InstanceDetail(
-            **instance.model_dump(),
+            **instance.model_copy(
+                update={key: updates[key] for key in ("name", "status") if key in updates}
+            ).model_dump(),
             volumes=volumes,
+            description=updates.get("description"),
+            metadata=updates.get("metadata"),
+            openstack_request_id=self._request_id(),
+        )
+
+    async def create_instances(
+        self, auth_context: dict[str, Any], project_id: str, region: str, payload: dict[str, Any]
+    ) -> MutationResult:
+        self._ensure_state()
+        self._require_project_scope(auth_context, project_id, region)
+        count = int(payload.get("count", 1))
+        created: list[Instance] = []
+        for index in range(count):
+            instance_id = uuid4()
+            name = str(payload["name"])
+            created.append(
+                Instance(
+                    id=instance_id,
+                    status="BUILD",
+                    name=name if count == 1 else f"{name}-{index + 1}",
+                    created_at=datetime.now(UTC),
+                    flavor=str(payload["flavor_id"]),
+                    image=str(payload.get("boot_source", {}).get("image_id") or "volume"),
+                    addresses=[],
+                )
+            )
+        self._created.setdefault(project_id, []).extend(created)
+        return MutationResult(
+            resource_id=str(created[0].id),
+            resource_name=created[0].name,
+            openstack_request_id=self._request_id(),
+        )
+
+    async def update_instance(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        instance = await self.get_instance(auth_context, project_id, region, instance_id)
+        updates = self._instance_updates.setdefault(instance.id, {})
+        if payload.get("name") is not None:
+            updates["name"] = payload["name"]
+        if "description" in payload and payload["description"] is not None:
+            updates["description"] = payload["description"]
+        if payload.get("metadata") is not None or payload.get("unset_metadata"):
+            metadata = dict(updates.get("metadata", instance.metadata or {}))
+            metadata.update(payload.get("metadata") or {})
+            for key in payload.get("unset_metadata", []):
+                metadata.pop(key, None)
+            updates["metadata"] = metadata
+        return MutationResult(
+            resource_id=instance_id,
+            resource_name=str(updates.get("name", instance.name or "")) or None,
+            openstack_request_id=self._request_id(),
+        )
+
+    async def delete_instance(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> MutationResult:
+        instance = await self.get_instance(auth_context, project_id, region, instance_id)
+        self._deleted.add(instance.id)
+        return MutationResult(resource_id=instance_id, openstack_request_id=self._request_id())
+
+    async def instance_action(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        del payload
+        instance = await self.get_instance(auth_context, project_id, region, instance_id)
+        status = {
+            "start": "ACTIVE",
+            "stop": "SHUTOFF",
+            "pause": "PAUSED",
+            "unpause": "ACTIVE",
+            "suspend": "SUSPENDED",
+            "resume": "ACTIVE",
+            "shelve": "SHELVED_OFFLOADED",
+            "unshelve": "ACTIVE",
+            "rescue": "RESCUE",
+            "unrescue": "ACTIVE",
+            "resize": "VERIFY_RESIZE",
+            "resize_confirm": "ACTIVE",
+            "resize_revert": "ACTIVE",
+            "rebuild": "REBUILD",
+        }.get(action)
+        if status is not None:
+            self._instance_updates.setdefault(instance.id, {})["status"] = status
+        return MutationResult(resource_id=instance_id, openstack_request_id=self._request_id())
+
+    async def create_console(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> RemoteConsoleResult:
+        await self.get_instance(auth_context, project_id, region, instance_id)
+        return RemoteConsoleResult(
+            url=f"https://console.invalid/novnc/{secrets.token_urlsafe(24)}",
+            openstack_request_id=self._request_id(),
+        )
+
+    async def image_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        image_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        self._require_project_scope(auth_context, project_id, region)
+        resource_id = image_id or str(uuid4())
+        return MutationResult(
+            resource_id=resource_id,
+            resource_name=str(payload.get("name")) if payload.get("name") else None,
+            openstack_request_id=self._request_id(),
+        )
+
+    async def flavor_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        flavor_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        self._require_project_scope(auth_context, project_id, region)
+        del action
+        resource_id = flavor_id or str(payload.get("id") or uuid4())
+        return MutationResult(
+            resource_id=resource_id,
+            resource_name=str(payload.get("name")) if payload.get("name") else None,
             openstack_request_id=self._request_id(),
         )
 
@@ -397,6 +545,7 @@ class FakeOpenStackAdapter:
             raise AdapterError(status_code=401, request_id=self._request_id())
 
     def _instances(self, project_id: str) -> tuple[Instance, ...]:
+        self._ensure_state()
         count = _FAKE_INSTANCE_COUNTS[project_id]
         project_label = "alpha" if project_id == "project-alpha" else "beta"
         image_id = str(uuid5(_FAKE_NAMESPACE, f"{project_id}:image"))
@@ -427,7 +576,18 @@ class FakeOpenStackAdapter:
                     ),
                 )
             )
-        return tuple(items)
+        items.extend(self._created.get(project_id, ()))
+        return tuple(
+            item.model_copy(update=self._instance_updates.get(item.id, {}))
+            for item in items
+            if item.id not in self._deleted
+        )
+
+    def _ensure_state(self) -> None:
+        if not hasattr(self, "_created"):
+            self._created = {}
+            self._deleted = set()
+            self._instance_updates = {}
 
     def _sort_instances(
         self,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, ParamSpec, TypeVar, cast
@@ -17,6 +19,7 @@ from vantage_bff.adapters.base import (
     ScopeResult,
     normalized_quota,
 )
+from vantage_bff.compute_models import MutationResult, RemoteConsoleResult
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -102,6 +105,7 @@ class OpenStackSdkAdapter:
         quota_timeout_seconds: float | None = None,
         instance_timeout_seconds: float | None = None,
         provisioning_timeout_seconds: float | None = None,
+        operation_timeout_seconds: int = 600,
         thread_capacity: int = 8,
     ) -> None:
         self.auth_url = auth_url
@@ -110,9 +114,10 @@ class OpenStackSdkAdapter:
         self.request_timeout_seconds = request_timeout_seconds
         self.quota_timeout_seconds = quota_timeout_seconds or float(request_timeout_seconds)
         self.instance_timeout_seconds = instance_timeout_seconds or float(request_timeout_seconds)
-        self.provisioning_timeout_seconds = (
-            provisioning_timeout_seconds or float(request_timeout_seconds)
+        self.provisioning_timeout_seconds = provisioning_timeout_seconds or float(
+            request_timeout_seconds
         )
+        self.operation_timeout_seconds = operation_timeout_seconds
         self._sdk_threads = _BoundedToThreadRunner(thread_capacity)
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
@@ -325,6 +330,457 @@ class OpenStackSdkAdapter:
             marker=marker,
             name=name,
         )
+
+    async def create_instances(
+        self, auth_context: dict[str, Any], project_id: str, region: str, payload: dict[str, Any]
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._create_instances, auth_context, project_id, region, payload
+        )
+
+    async def update_instance(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._update_instance, auth_context, project_id, region, instance_id, payload
+        )
+
+    async def delete_instance(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._delete_instance, auth_context, project_id, region, instance_id
+        )
+
+    async def instance_action(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._instance_action,
+            auth_context,
+            project_id,
+            region,
+            instance_id,
+            action,
+            payload,
+        )
+
+    async def create_console(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> RemoteConsoleResult:
+        return await self._sdk_threads.run(
+            self._create_console, auth_context, project_id, region, instance_id
+        )
+
+    async def image_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        image_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._image_mutation, auth_context, project_id, region, action, image_id, payload
+        )
+
+    async def flavor_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        flavor_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._flavor_mutation, auth_context, project_id, region, action, flavor_id, payload
+        )
+
+    def _create_instances(
+        self, auth_context: dict[str, Any], project_id: str, region: str, payload: dict[str, Any]
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        created_ports: list[str] = []
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            networks: list[dict[str, Any]] = []
+            security_groups = [str(value) for value in payload.get("security_group_ids", [])]
+            for attachment in payload["networks"]:
+                if attachment.get("port_id"):
+                    networks.append({"port": str(attachment["port_id"])})
+                    continue
+                if attachment.get("subnet_id") or security_groups:
+                    fixed_ips: list[dict[str, str]] = []
+                    if attachment.get("subnet_id"):
+                        fixed_ip = {"subnet_id": str(attachment["subnet_id"])}
+                        if attachment.get("fixed_ip"):
+                            fixed_ip["ip_address"] = str(attachment["fixed_ip"])
+                        fixed_ips.append(fixed_ip)
+                    port = cast(Any, connection.network).create_port(
+                        network_id=str(attachment["network_id"]),
+                        **({"fixed_ips": fixed_ips} if fixed_ips else {}),
+                        security_group_ids=security_groups,
+                    )
+                    created_ports.append(str(port.id))
+                    networks.append({"port": str(port.id), **_optional_tag(attachment)})
+                    continue
+                network = {"uuid": str(attachment["network_id"]), **_optional_tag(attachment)}
+                if attachment.get("fixed_ip"):
+                    network["fixed_ip"] = attachment["fixed_ip"]
+                networks.append(network)
+
+            attrs: dict[str, Any] = {
+                "name": payload["name"],
+                "flavor_id": payload["flavor_id"],
+                "networks": networks,
+                "min_count": payload.get("count", 1),
+                "max_count": payload.get("count", 1),
+                "metadata": payload.get("metadata", {}),
+                "config_drive": payload.get("config_drive", False),
+            }
+            if security_groups and not any("port" in network for network in networks):
+                attrs["security_groups"] = [{"name": value} for value in security_groups]
+            for source, target in (
+                ("description", "description"),
+                ("hostname", "hostname"),
+                ("availability_zone", "availability_zone"),
+                ("keypair_name", "key_name"),
+            ):
+                if payload.get(source) is not None:
+                    attrs[target] = payload[source]
+            if payload.get("user_data"):
+                attrs["user_data"] = base64.b64encode(
+                    str(payload["user_data"]).encode("utf-8")
+                ).decode("ascii")
+            attrs.update(
+                _boot_source_attrs(payload["boot_source"], payload.get("block_devices", []))
+            )
+            compute = cast(Any, connection.compute)
+            server = compute.create_server(**attrs)
+            server = self._wait_for_server_state(compute, server, {"ACTIVE"})
+            return MutationResult(
+                resource_id=str(server.id),
+                resource_name=getattr(server, "name", payload["name"]),
+                openstack_request_id=_resource_request_id(server) or correlation_id,
+            )
+        except Exception as exc:
+            if created_ports:
+                try:
+                    connection = self._project_connection(
+                        auth_context, project_id, region, correlation_id
+                    )
+                    for port_id in created_ports:
+                        cast(Any, connection.network).delete_port(port_id, ignore_missing=True)
+                except Exception:
+                    pass
+            raise _instance_failure(exc) from exc
+
+    def _update_instance(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            compute = cast(Any, connection.compute)
+            attrs = {
+                key: payload[key] for key in ("name", "description") if payload.get(key) is not None
+            }
+            resource = compute.update_server(instance_id, **attrs) if attrs else None
+            if payload.get("metadata"):
+                compute.set_server_metadata(instance_id, **payload["metadata"])
+            if payload.get("unset_metadata"):
+                compute.delete_server_metadata(instance_id, payload["unset_metadata"])
+            return MutationResult(
+                resource_id=instance_id,
+                resource_name=payload.get("name"),
+                openstack_request_id=_resource_request_id(resource) or correlation_id,
+            )
+        except Exception as exc:
+            raise _instance_failure(exc) from exc
+
+    def _delete_instance(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            compute = cast(Any, connection.compute)
+            server = compute.get_server(instance_id)
+            compute.delete_server(server, ignore_missing=False)
+            self._wait_for_server_delete(compute, server)
+            return MutationResult(resource_id=instance_id, openstack_request_id=correlation_id)
+        except Exception as exc:
+            raise _instance_failure(exc) from exc
+
+    def _instance_action(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        instance_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            compute = cast(Any, connection.compute)
+            server = compute.get_server(instance_id)
+            simple = {
+                "start": "start_server",
+                "stop": "stop_server",
+                "pause": "pause_server",
+                "unpause": "unpause_server",
+                "suspend": "suspend_server",
+                "resume": "resume_server",
+                "shelve": "shelve_server",
+                "unshelve": "unshelve_server",
+                "unrescue": "unrescue_server",
+                "unlock": "unlock_server",
+                "resize_confirm": "confirm_server_resize",
+                "resize_revert": "revert_server_resize",
+            }
+            if action in simple:
+                getattr(compute, simple[action])(server)
+            elif action in {"soft_reboot", "hard_reboot"}:
+                compute.reboot_server(server, action.removesuffix("_reboot").upper())
+            elif action == "lock":
+                compute.lock_server(server, locked_reason=payload.get("locked_reason"))
+            elif action == "rescue":
+                compute.rescue_server(server, image_ref=payload.get("image_id"))
+            elif action == "resize":
+                compute.resize_server(server, payload["flavor_id"])
+            elif action == "rebuild":
+                attrs = {
+                    key: value
+                    for key, value in payload.items()
+                    if key in {"name", "metadata", "preserve_ephemeral"} and value is not None
+                }
+                if payload.get("user_data") is not None:
+                    attrs["user_data"] = base64.b64encode(
+                        str(payload["user_data"]).encode("utf-8")
+                    ).decode("ascii")
+                compute.rebuild_server(server, payload["image_id"], **attrs)
+            elif action == "snapshot":
+                image = compute.create_server_image(
+                    server,
+                    payload["name"],
+                    metadata=payload.get("metadata"),
+                    wait=True,
+                    timeout=self.operation_timeout_seconds,
+                )
+                return MutationResult(
+                    resource_id=str(getattr(image, "id", "")) or None,
+                    resource_name=payload["name"],
+                    openstack_request_id=_resource_request_id(image) or correlation_id,
+                )
+            else:
+                raise ValueError(f"Unsupported instance action: {action}")
+            target_states = {
+                "start": {"ACTIVE"},
+                "stop": {"SHUTOFF"},
+                "soft_reboot": {"ACTIVE"},
+                "hard_reboot": {"ACTIVE"},
+                "pause": {"PAUSED"},
+                "unpause": {"ACTIVE"},
+                "suspend": {"SUSPENDED"},
+                "resume": {"ACTIVE"},
+                "shelve": {"SHELVED", "SHELVED_OFFLOADED"},
+                "unshelve": {"ACTIVE"},
+                "rescue": {"RESCUE"},
+                "unrescue": {"ACTIVE"},
+                "resize": {"VERIFY_RESIZE", "ACTIVE", "SHUTOFF"},
+                "resize_confirm": {"ACTIVE", "SHUTOFF"},
+                "resize_revert": {"ACTIVE", "SHUTOFF"},
+                "rebuild": {"ACTIVE"},
+            }.get(action)
+            if target_states is not None:
+                self._wait_for_server_state(
+                    compute,
+                    server,
+                    target_states,
+                    flavor_id=str(payload["flavor_id"]) if action == "resize" else None,
+                    require_update=action in {"soft_reboot", "hard_reboot", "rebuild"},
+                )
+            return MutationResult(resource_id=instance_id, openstack_request_id=correlation_id)
+        except Exception as exc:
+            raise _instance_failure(exc) from exc
+
+    def _create_console(
+        self, auth_context: dict[str, Any], project_id: str, region: str, instance_id: str
+    ) -> RemoteConsoleResult:
+        correlation_id = _global_request_id()
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            console = cast(Any, connection.compute).create_console(
+                instance_id, "novnc", console_protocol="vnc"
+            )
+            values = _as_mapping(console)
+            url = values.get("url")
+            if not isinstance(url, str) or not url:
+                raise ValueError("Nova did not return a noVNC URL")
+            return RemoteConsoleResult(url=url, openstack_request_id=correlation_id)
+        except Exception as exc:
+            raise _instance_failure(exc) from exc
+
+    def _image_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        image_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            image = cast(Any, connection.image)
+            resource: Any = None
+            if action == "create":
+                attrs = _image_attrs(payload)
+                resource = image.create_image(**attrs)
+                image_id = str(resource.id)
+                if payload.get("import_uri"):
+                    image.import_image(image_id, method="web-download", uri=payload["import_uri"])
+            elif action == "update":
+                resource = image.update_image(image_id, **_image_attrs(payload))
+                unset = payload.get("unset_properties", [])
+                if unset:
+                    current = image.get_image(image_id)
+                    current.patch(
+                        image,
+                        [
+                            {"op": "remove", "path": f"/{_json_pointer_segment(prop)}"}
+                            for prop in unset
+                        ],
+                        prepend_key=False,
+                    )
+            elif action == "delete":
+                image.delete_image(image_id, ignore_missing=False)
+            elif action == "deactivate":
+                image.deactivate_image(image_id)
+            elif action == "reactivate":
+                image.reactivate_image(image_id)
+            elif action == "member_add":
+                resource = image.add_member(image_id, member_id=payload["project_id"])
+            elif action == "member_remove":
+                image.remove_member(payload["project_id"], image=image_id, ignore_missing=False)
+            else:
+                raise ValueError(f"Unsupported image action: {action}")
+            return MutationResult(
+                resource_id=image_id,
+                resource_name=payload.get("name"),
+                openstack_request_id=_resource_request_id(resource) or correlation_id,
+            )
+        except Exception as exc:
+            raise _provisioning_failure(exc) from exc
+
+    def _flavor_mutation(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        action: str,
+        flavor_id: str | None,
+        payload: dict[str, Any],
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        try:
+            connection = self._project_connection(auth_context, project_id, region, correlation_id)
+            compute = cast(Any, connection.compute)
+            resource: Any = None
+            if action == "create":
+                attrs = {
+                    "name": payload["name"],
+                    "vcpus": payload["vcpus"],
+                    "ram": payload["ram_mib"],
+                    "disk": payload.get("disk_gib", 0),
+                    "ephemeral": payload.get("ephemeral_gib", 0),
+                    "swap": payload.get("swap_mib", 0),
+                    "rxtx_factor": payload.get("rxtx_factor", 1.0),
+                    "is_public": payload.get("is_public", True),
+                }
+                if payload.get("id"):
+                    attrs["id"] = payload["id"]
+                if payload.get("description") is not None:
+                    attrs["description"] = payload["description"]
+                resource = compute.create_flavor(**attrs)
+                flavor_id = str(resource.id)
+                if payload.get("extra_specs"):
+                    compute.create_flavor_extra_specs(flavor_id, payload["extra_specs"])
+                for tenant in payload.get("access_project_ids", []):
+                    compute.flavor_add_tenant_access(flavor_id, tenant)
+            elif action == "update":
+                resource = compute.update_flavor(flavor_id, description=payload.get("description"))
+            elif action == "delete":
+                compute.delete_flavor(flavor_id, ignore_missing=False)
+            elif action == "extra_specs_set":
+                resource = compute.create_flavor_extra_specs(flavor_id, payload["specs"])
+            elif action == "extra_spec_unset":
+                compute.delete_flavor_extra_specs_property(flavor_id, payload["key"])
+            elif action == "access_add":
+                resource = compute.flavor_add_tenant_access(flavor_id, payload["project_id"])
+            elif action == "access_remove":
+                resource = compute.flavor_remove_tenant_access(flavor_id, payload["project_id"])
+            else:
+                raise ValueError(f"Unsupported flavor action: {action}")
+            return MutationResult(
+                resource_id=flavor_id,
+                resource_name=payload.get("name"),
+                openstack_request_id=_resource_request_id(resource) or correlation_id,
+            )
+        except Exception as exc:
+            raise _provisioning_failure(exc) from exc
+
+    def _wait_for_server_state(
+        self,
+        compute: Any,
+        server: Any,
+        target_states: set[str],
+        *,
+        flavor_id: str | None = None,
+        require_update: bool = False,
+    ) -> Any:
+        """Observe Nova until a safe terminal or recovery state is visible."""
+
+        deadline = time.monotonic() + self.operation_timeout_seconds
+        current = server
+        initial_updated = _optional_text(server, "updated", "updated_at")
+        while True:
+            current = compute.get_server(current)
+            status = str(getattr(current, "status", "")).upper()
+            if status == "ERROR":
+                raise RuntimeError("Nova server entered ERROR")
+            flavor_matches = flavor_id is None or _reference(current, "flavor") == flavor_id
+            updated = _optional_text(current, "updated", "updated_at")
+            update_observed = not require_update or updated != initial_updated
+            if status in target_states and flavor_matches and update_observed:
+                return current
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Nova server did not reach {sorted(target_states)}")
+            time.sleep(2)
+
+    def _wait_for_server_delete(self, compute: Any, server: Any) -> None:
+        compute.wait_for_delete(server, interval=2, wait=self.operation_timeout_seconds)
 
     def _scope(self, auth_context: dict[str, Any], project_id: str, region: str) -> ScopeResult:
         try:
@@ -784,6 +1240,105 @@ def _response_request_id(response: Any) -> str | None:
     return None
 
 
+def _resource_request_id(resource: Any) -> str | None:
+    if resource is None:
+        return None
+    for name in ("request_id", "x_openstack_request_id"):
+        value = getattr(resource, name, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _optional_tag(attachment: Mapping[str, Any]) -> dict[str, str]:
+    tag = attachment.get("tag")
+    return {"tag": tag} if isinstance(tag, str) and tag else {}
+
+
+def _boot_source_attrs(
+    boot_source: Mapping[str, Any], block_devices: list[dict[str, Any]]
+) -> dict[str, Any]:
+    mappings: list[dict[str, Any]] = []
+    source_type = str(boot_source["type"])
+    if source_type == "image" and not boot_source.get("create_boot_volume"):
+        attrs: dict[str, Any] = {"image_id": str(boot_source["image_id"])}
+    else:
+        source_id_name = {
+            "image": "image_id",
+            "volume": "volume_id",
+            "volume_snapshot": "snapshot_id",
+        }[source_type]
+        mappings.append(
+            {
+                "source_type": "snapshot" if source_type == "volume_snapshot" else source_type,
+                "uuid": str(boot_source[source_id_name]),
+                "destination_type": "volume",
+                "boot_index": 0,
+                "delete_on_termination": boot_source.get("delete_on_termination", False),
+                **(
+                    {"volume_size": boot_source["volume_size_gib"]}
+                    if boot_source.get("volume_size_gib") is not None
+                    else {}
+                ),
+                **(
+                    {"volume_type": boot_source["volume_type"]}
+                    if boot_source.get("volume_type") is not None
+                    else {}
+                ),
+            }
+        )
+        attrs = {}
+    for device in block_devices:
+        mapping = {
+            "source_type": device["source_type"],
+            "destination_type": device["destination_type"],
+            "boot_index": device["boot_index"],
+            "delete_on_termination": device.get("delete_on_termination", False),
+        }
+        aliases = {
+            "source_id": "uuid",
+            "device_name": "device_name",
+            "volume_size_gib": "volume_size",
+            "volume_type": "volume_type",
+            "tag": "tag",
+        }
+        for source, target in aliases.items():
+            if device.get(source) is not None:
+                mapping[target] = str(device[source])
+        mappings.append(mapping)
+    if mappings:
+        attrs["block_device_mapping_v2"] = mappings
+    return attrs
+
+
+def _image_attrs(payload: Mapping[str, Any]) -> dict[str, Any]:
+    aliases = {
+        "name": "name",
+        "disk_format": "disk_format",
+        "container_format": "container_format",
+        "visibility": "visibility",
+        "min_disk_gib": "min_disk",
+        "min_ram_mib": "min_ram",
+        "protected": "is_protected",
+        "tags": "tags",
+    }
+    attrs = {
+        target: payload[source]
+        for source, target in aliases.items()
+        if source in payload and payload[source] is not None
+    }
+    properties = payload.get("properties")
+    if isinstance(properties, Mapping):
+        attrs.update(properties)
+    return attrs
+
+
+def _json_pointer_segment(value: str) -> str:
+    """Escape an arbitrary Glance property name for an RFC 6901 pointer."""
+
+    return value.replace("~", "~0").replace("/", "~1")
+
+
 def _global_request_id() -> str:
     return f"req-{uuid4()}"
 
@@ -910,6 +1465,12 @@ def _normalize_instance_detail(resource: Any, request_id: str) -> InstanceDetail
     return InstanceDetail(
         **instance.model_dump(),
         volumes=_volumes(resource),
+        description=_optional_text(resource, "description"),
+        metadata=_optional_string_mapping(resource, "metadata"),
+        availability_zone=_optional_text(
+            resource, "OS-EXT-AZ:availability_zone", "availability_zone"
+        ),
+        locked=_optional_bool(resource, "locked", "is_locked"),
         openstack_request_id=request_id,
     )
 
@@ -933,6 +1494,24 @@ def _optional_bool(value: Any, *names: str) -> bool | None:
     return raw if present and isinstance(raw, bool) else None
 
 
+def _optional_string_mapping(value: Any, *names: str) -> dict[str, str] | None:
+    present, raw = _source_value(value, *names)
+    if not present or not isinstance(raw, Mapping):
+        return None
+    return {
+        str(key): str(item)
+        for key, item in raw.items()
+        if isinstance(key, str) and isinstance(item, (str, int, float, bool))
+    }
+
+
+def _optional_string_list(value: Any, *names: str) -> list[str] | None:
+    present, raw = _source_value(value, *names)
+    if not present or not isinstance(raw, list):
+        return None
+    return [item for item in raw if isinstance(item, str)]
+
+
 def _normalize_image(resource: Any) -> Image:
     visibility_value = _optional_text(resource, "visibility")
     try:
@@ -950,6 +1529,9 @@ def _normalize_image(resource: Any) -> Image:
         min_disk_gib=_optional_int(resource, "min_disk", "min_disk_gib"),
         min_ram_mib=_optional_int(resource, "min_ram", "min_ram_mib"),
         created_at=_created_at(resource),
+        protected=_optional_bool(resource, "protected", "is_protected"),
+        properties=_optional_string_mapping(resource, "properties"),
+        tags=_optional_string_list(resource, "tags"),
     )
 
 
@@ -962,6 +1544,8 @@ def _normalize_flavor(resource: Any) -> Flavor:
         disk_gib=_optional_int(resource, "disk", "disk_gib"),
         ephemeral_gib=_optional_int(resource, "OS-FLV-EXT-DATA:ephemeral", "ephemeral"),
         is_public=_optional_bool(resource, "os-flavor-access:is_public", "is_public"),
+        description=_optional_text(resource, "description"),
+        extra_specs=_optional_string_mapping(resource, "extra_specs"),
     )
 
 

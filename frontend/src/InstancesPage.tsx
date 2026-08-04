@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { ApiError, api } from './api'
+import { CreateInstanceButton, InstanceActions } from './ComputeLifecycle'
 import { DEFAULT_INSTANCE_QUERY } from './instance-route'
 import { Pagination } from './Pagination'
 import type {
@@ -374,6 +375,7 @@ export function InstancesPage({
           <h1>{t.instances}</h1>
           <p className="muted">{t.description}</p>
         </div>
+        <CreateInstanceButton locale={locale} />
       </div>
       <InstanceFilters
         key={`${query.name}\u0000${query.imageId}`}
@@ -671,11 +673,12 @@ function InstanceDrawer({
   onExpired: () => void
 }) {
   const [tab, setTab] = useState<DetailTab>('overview')
+  const [refreshVersion, setRefreshVersion] = useState(0)
   const closeButton = useRef<HTMLButtonElement>(null)
   const drawer = useRef<HTMLElement>(null)
   const tabButtons = useRef<Partial<Record<DetailTab, HTMLButtonElement | null>>>({})
   const { data, loading, updating, failure } = useRevalidatedResource<InstanceDetail>({
-    key: `${scopeKey}:${instanceId}`,
+    key: `${scopeKey}:${instanceId}:${refreshVersion}`,
     loader: (signal) => api.instance(instanceId, signal),
     onExpired,
   })
@@ -761,6 +764,13 @@ function InstanceDrawer({
             ×
           </button>
         </header>
+        {instance && (
+          <InstanceActions
+            instance={instance}
+            locale={locale}
+            onChanged={() => setRefreshVersion((value) => value + 1)}
+          />
+        )}
         <div className="drawer-sync" aria-live="polite">
           {updating && <span>{t.updating}</span>}
           {!updating && data?.stale && <span className="stale">{t.stale}</span>}

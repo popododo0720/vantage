@@ -1,4 +1,8 @@
 import type {
+  ConsoleSession,
+  CreateInstancePayload,
+  DeletePreview,
+  FlavorPage,
   InstanceDetail,
   InstancePage,
   InstanceQuery,
@@ -6,6 +10,7 @@ import type {
   ImageQuery,
   InventoryQuery,
   KeyPairPage,
+  Operation,
   Problem,
   ProjectOverview,
   ProjectPage,
@@ -75,6 +80,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+function mutation<T>(path: string, method: string, body?: unknown): Promise<T> {
+  return request<T>(path, {
+    method,
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
 export const api = {
   session: () => request<Session>('/session'),
   login: (username: string, password: string, domain: string) => {
@@ -126,6 +139,10 @@ export const api = {
     if (filters.visibility) query.set('visibility', filters.visibility)
     return request<ImagePage>(`/images?${query}`, { signal })
   },
+  flavors: (filters: InventoryQuery, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ limit: String(filters.limit), page: String(filters.page) })
+    return request<FlavorPage>(`/flavors?${query}`, { signal })
+  },
   keypairs: (filters: InventoryQuery, signal?: AbortSignal) => {
     const query = new URLSearchParams({
       limit: String(filters.limit),
@@ -135,6 +152,44 @@ export const api = {
   },
   instance: (instanceId: string, signal?: AbortSignal) =>
     request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),
+  createInstance: (payload: CreateInstancePayload) =>
+    mutation<Operation>('/instances', 'POST', payload),
+  updateInstance: (instanceId: string, payload: Record<string, unknown>) =>
+    mutation<Operation>(`/instances/${encodeURIComponent(instanceId)}`, 'PATCH', payload),
+  deleteInstance: (instanceId: string) =>
+    mutation<Operation>(`/instances/${encodeURIComponent(instanceId)}`, 'DELETE'),
+  deletePreview: (instanceId: string) =>
+    request<DeletePreview>(`/instances/${encodeURIComponent(instanceId)}/delete-preview`),
+  instanceAction: (instanceId: string, action: string, extra: Record<string, unknown> = {}) =>
+    mutation<Operation>(`/instances/${encodeURIComponent(instanceId)}/actions`, 'POST', {
+      action,
+      ...extra,
+    }),
+  resizeInstance: (instanceId: string, flavorId: string) =>
+    mutation<Operation>(`/instances/${encodeURIComponent(instanceId)}/resize`, 'POST', {
+      flavor_id: flavorId,
+    }),
+  resizeDecision: (instanceId: string, decision: 'confirm' | 'revert') =>
+    mutation<Operation>(
+      `/instances/${encodeURIComponent(instanceId)}/resize/${decision}`,
+      'POST',
+    ),
+  rebuildInstance: (instanceId: string, imageId: string) =>
+    mutation<Operation>(`/instances/${encodeURIComponent(instanceId)}/rebuild`, 'POST', {
+      image_id: imageId,
+    }),
+  snapshotInstance: (instanceId: string, name: string) =>
+    mutation<Operation>(`/instances/${encodeURIComponent(instanceId)}/snapshot`, 'POST', { name }),
+  console: (instanceId: string) =>
+    request<ConsoleSession>(`/instances/${encodeURIComponent(instanceId)}/console`, {
+      method: 'POST',
+      body: JSON.stringify({ protocol: 'vnc', type: 'novnc' }),
+    }),
+  operation: (operationId: string) => request<Operation>(`/operations/${operationId}`),
+  imageMutation: (imageId: string | undefined, method: string, payload?: unknown, suffix = '') =>
+    mutation<Operation>(`/images${imageId ? `/${encodeURIComponent(imageId)}` : ''}${suffix}`, method, payload),
+  flavorMutation: (flavorId: string | undefined, method: string, payload?: unknown, suffix = '') =>
+    mutation<Operation>(`/flavors${flavorId ? `/${encodeURIComponent(flavorId)}` : ''}${suffix}`, method, payload),
   logout: async () => {
     await request<void>('/session', { method: 'DELETE' })
     csrfToken = ''

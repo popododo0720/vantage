@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ApiError, api } from './api'
+import { FlavorsPage } from './ComputeResources'
 import { DEFAULT_INSTANCE_QUERY, instancePath, parseInstanceRoute } from './instance-route'
 import { InstancesPage } from './InstancesPage'
 import {
   DEFAULT_IMAGE_QUERY,
+  DEFAULT_FLAVOR_QUERY,
   DEFAULT_KEYPAIR_QUERY,
+  flavorPath,
   imagePath,
   keyPairPath,
   parseImageRoute,
+  parseFlavorRoute,
   parseKeyPairRoute,
 } from './inventory-route'
 import { Pagination } from './Pagination'
@@ -46,6 +50,7 @@ type State =
     error?: ErrorInfo
   }
   | { kind: 'images'; session: Session; query: ImageQuery; error?: ErrorInfo }
+  | { kind: 'flavors'; session: Session; query: InventoryQuery; error?: ErrorInfo }
   | { kind: 'keypairs'; session: Session; query: InventoryQuery; error?: ErrorInfo }
 type HistoryMode = 'push' | 'replace' | 'none'
 
@@ -127,6 +132,7 @@ const labels = {
     unknown: 'Unknown',
     instances: 'Instances',
     images: 'Images',
+    flavors: 'Flavors',
     access: 'Access',
     keypairs: 'Key pairs',
     cores: 'vCPUs',
@@ -223,6 +229,7 @@ const labels = {
     unknown: '알 수 없음',
     instances: '인스턴스',
     images: '이미지',
+    flavors: 'Flavor',
     access: '접근',
     keypairs: '키 페어',
     cores: 'vCPU',
@@ -257,6 +264,8 @@ function scopedState(session: Session, route = '/overview', drawerFromList = fal
   }
   const imageQuery = parseImageRoute(url.href)
   if (imageQuery) return { kind: 'images', session, query: imageQuery }
+  const flavorQuery = parseFlavorRoute(url.href)
+  if (flavorQuery) return { kind: 'flavors', session, query: flavorQuery }
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return { kind: 'keypairs', session, query: keypairQuery }
   const instanceRoute = parseInstanceRoute(url.href)
@@ -282,6 +291,7 @@ function pathForState(state: State): string {
   }
   if (state.kind === 'instances') return instancePath(state.query, state.selectedId)
   if (state.kind === 'images') return imagePath(state.query)
+  if (state.kind === 'flavors') return flavorPath(state.query)
   if (state.kind === 'keypairs') return keyPairPath(state.query)
   return window.location.pathname
 }
@@ -294,6 +304,8 @@ function safeReturnUrl(value: unknown): string | undefined {
   if (instanceRoute) return instancePath(instanceRoute.query, instanceRoute.instanceId)
   const imageQuery = parseImageRoute(url.href)
   if (imageQuery) return imagePath(imageQuery)
+  const flavorQuery = parseFlavorRoute(url.href)
+  if (flavorQuery) return flavorPath(flavorQuery)
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return keyPairPath(keypairQuery)
   if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
@@ -321,6 +333,7 @@ function sessionForState(state: State): Session | undefined {
     || state.kind === 'quotas'
     || state.kind === 'instances'
     || state.kind === 'images'
+    || state.kind === 'flavors'
     || state.kind === 'keypairs'
     ? state.session
     : undefined
@@ -417,7 +430,8 @@ export function App() {
         next = scopedState(session, currentUrl())
       } else if (parseInstanceRoute(window.location.href) && session?.active_scope) {
         next = scopedState(session, currentUrl(), Boolean(window.history.state?.instanceDrawer))
-      } else if ((parseImageRoute(window.location.href) || parseKeyPairRoute(window.location.href)) && session?.active_scope) {
+      } else if ((parseImageRoute(window.location.href) || parseFlavorRoute(window.location.href)
+        || parseKeyPairRoute(window.location.href)) && session?.active_scope) {
         next = scopedState(session, currentUrl())
       }
       if (next) transition(next, 'none')
@@ -447,6 +461,7 @@ export function App() {
       && state.kind !== 'quotas'
       && state.kind !== 'instances'
       && state.kind !== 'images'
+      && state.kind !== 'flavors'
       && state.kind !== 'keypairs'
     ) return
     try {
@@ -524,6 +539,7 @@ export function App() {
       instanceQuery={state.kind === 'instances' ? state.query : DEFAULT_INSTANCE_QUERY}
       selectedInstanceId={state.kind === 'instances' ? state.selectedId : undefined}
       imageQuery={state.kind === 'images' ? state.query : DEFAULT_IMAGE_QUERY}
+      flavorQuery={state.kind === 'flavors' ? state.query : DEFAULT_FLAVOR_QUERY}
       keypairQuery={state.kind === 'keypairs' ? state.query : DEFAULT_KEYPAIR_QUERY}
       onNavigate={(view, filter = 'all') => {
         if (view === 'quotas') transition({ kind: 'quotas', session: state.session, filter })
@@ -536,6 +552,8 @@ export function App() {
           })
         } else if (view === 'images') {
           transition({ kind: 'images', session: state.session, query: DEFAULT_IMAGE_QUERY })
+        } else if (view === 'flavors') {
+          transition({ kind: 'flavors', session: state.session, query: DEFAULT_FLAVOR_QUERY })
         } else if (view === 'keypairs') {
           transition({ kind: 'keypairs', session: state.session, query: DEFAULT_KEYPAIR_QUERY })
         } else transition({ kind: 'overview', session: state.session })
@@ -562,6 +580,9 @@ export function App() {
       }}
       onImageQuery={(query, mode) => {
         if (state.kind === 'images') transition({ ...state, query }, mode)
+      }}
+      onFlavorQuery={(query, mode) => {
+        if (state.kind === 'flavors') transition({ ...state, query }, mode)
       }}
       onKeyPairQuery={(query, mode) => {
         if (state.kind === 'keypairs') transition({ ...state, query }, mode)
@@ -992,12 +1013,14 @@ function ProjectWorkspace({
   instanceQuery,
   selectedInstanceId,
   imageQuery,
+  flavorQuery,
   keypairQuery,
   onNavigate,
   onInstanceQuery,
   onInstanceOpen,
   onInstanceClose,
   onImageQuery,
+  onFlavorQuery,
   onKeyPairQuery,
   onSwitch,
   onExpired,
@@ -1008,17 +1031,19 @@ function ProjectWorkspace({
   language: ReactNode
   session: Session
   error?: ErrorInfo
-  view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs'
+  view: 'overview' | 'quotas' | 'instances' | 'images' | 'flavors' | 'keypairs'
   filter: QuotaFilter
   instanceQuery: InstanceQuery
   selectedInstanceId?: string
   imageQuery: ImageQuery
+  flavorQuery: InventoryQuery
   keypairQuery: InventoryQuery
-  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs', filter?: QuotaFilter) => void
+  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'flavors' | 'keypairs', filter?: QuotaFilter) => void
   onInstanceQuery: (query: InstanceQuery, mode: 'push' | 'replace') => void
   onInstanceOpen: (instanceId: string) => void
   onInstanceClose: () => void
   onImageQuery: (query: ImageQuery, mode: 'push' | 'replace') => void
+  onFlavorQuery: (query: InventoryQuery, mode: 'push' | 'replace') => void
   onKeyPairQuery: (query: InventoryQuery, mode: 'push' | 'replace') => void
   onSwitch: () => void
   onExpired: () => void
@@ -1104,6 +1129,17 @@ function ProjectWorkspace({
         >
           {t.images}
         </a>
+        <a
+          href="/flavors"
+          className={view === 'flavors' ? 'selected' : undefined}
+          aria-current={view === 'flavors' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('flavors')
+          }}
+        >
+          {t.flavors}
+        </a>
         <strong>{t.access}</strong>
         <a
           href="/keypairs"
@@ -1155,6 +1191,14 @@ function ProjectWorkspace({
             locale={locale}
             query={imageQuery}
             onQuery={onImageQuery}
+            onExpired={onExpired}
+          />
+        ) : view === 'flavors' ? (
+          <FlavorsPage
+            scopeKey={`${scope.project.id}:${scope.region}`}
+            locale={locale}
+            query={flavorQuery}
+            onQuery={onFlavorQuery}
             onExpired={onExpired}
           />
         ) : (

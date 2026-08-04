@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Vantage BFF API
   version: 0.3.0
-  summary: Implemented session, project-scope, quota, and instance inventory API
+  summary: Implemented session, scope, inventory, and compute lifecycle API
   description: |
     Browser-facing API implemented by the current Vantage runtime. The browser
     never receives an OpenStack token or calls an OpenStack service endpoint
@@ -296,6 +296,19 @@ paths:
           $ref: "#/components/responses/GatewayTimeout"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+    post:
+      tags: [Instances]
+      summary: Create one or more project instances
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateInstanceRequest"}
+      responses:
+        "202": {$ref: "#/components/responses/AcceptedOperation"}
   /images:
     get:
       tags: [Provisioning Inputs]
@@ -324,6 +337,17 @@ paths:
         "503": {$ref: "#/components/responses/ServiceUnavailable"}
         "504": {$ref: "#/components/responses/GatewayTimeout"}
         "422": {$ref: "#/components/responses/InvalidRequest"}
+    post:
+      tags: [Provisioning Inputs]
+      summary: Create or web-import an image subject to Glance policy
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/ImageCreateRequest"}}}
+      responses:
+        "202": {$ref: "#/components/responses/AcceptedOperation"}
   /flavors:
     get:
       tags: [Provisioning Inputs]
@@ -346,6 +370,17 @@ paths:
         "503": {$ref: "#/components/responses/ServiceUnavailable"}
         "504": {$ref: "#/components/responses/GatewayTimeout"}
         "422": {$ref: "#/components/responses/InvalidRequest"}
+    post:
+      tags: [Provisioning Inputs]
+      summary: Create an administrator-policy-gated Flavor
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/FlavorCreateRequest"}}}
+      responses:
+        "202": {$ref: "#/components/responses/AcceptedOperation"}
   /keypairs:
     get:
       tags: [Provisioning Inputs]
@@ -451,6 +486,158 @@ paths:
           $ref: "#/components/responses/GatewayTimeout"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+    patch:
+      tags: [Instances]
+      summary: Edit Nova-mutable instance fields
+      parameters:
+        - {$ref: "#/components/parameters/InstanceId"}
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/UpdateInstanceRequest"}}}
+      responses:
+        "202": {$ref: "#/components/responses/AcceptedOperation"}
+    delete:
+      tags: [Instances]
+      summary: Delete an instance after dependency confirmation
+      parameters:
+        - {$ref: "#/components/parameters/InstanceId"}
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      responses:
+        "202": {$ref: "#/components/responses/AcceptedOperation"}
+  /operations/{operation_id}:
+    get:
+      tags: [Instances]
+      summary: Get an isolated operation
+      parameters: [{name: operation_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {"200": {description: Operation, content: {application/json: {schema: {$ref: "#/components/schemas/Operation"}}}}}
+  /instances/{instance_id}/delete-preview:
+    get:
+      tags: [Instances]
+      summary: Preview retained dependencies
+      parameters: [{$ref: "#/components/parameters/InstanceId"}]
+      responses: {"200": {description: Preview, content: {application/json: {schema: {$ref: "#/components/schemas/DeletePreview"}}}}}
+  /instances/{instance_id}/actions:
+    post:
+      tags: [Instances]
+      summary: Run a lifecycle action
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/InstanceActionRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /instances/{instance_id}/resize:
+    post:
+      tags: [Instances]
+      summary: Resize an instance
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ResizeRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /instances/{instance_id}/resize/confirm:
+    post:
+      tags: [Instances]
+      summary: Confirm resize
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /instances/{instance_id}/resize/revert:
+    post:
+      tags: [Instances]
+      summary: Revert resize
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /instances/{instance_id}/rebuild:
+    post:
+      tags: [Instances]
+      summary: Rebuild an instance
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/RebuildRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /instances/{instance_id}/snapshot:
+    post:
+      tags: [Instances]
+      summary: Snapshot an instance
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SnapshotRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /instances/{instance_id}/console:
+    post:
+      tags: [Instances]
+      summary: Create a short-lived noVNC session
+      parameters: [{$ref: "#/components/parameters/InstanceId"}, {$ref: "#/components/parameters/CsrfToken"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ConsoleRequest"}}}}
+      responses: {"201": {description: Ephemeral URL, content: {application/json: {schema: {$ref: "#/components/schemas/ConsoleSession"}}}}}
+  /images/{image_id}:
+    parameters: [{name: image_id, in: path, required: true, schema: {type: string, format: uuid}}]
+    patch:
+      tags: [Provisioning Inputs]
+      summary: Update an image
+      parameters: [{$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ImageUpdateRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+    delete:
+      tags: [Provisioning Inputs]
+      summary: Delete an image
+      parameters: [{$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /images/{image_id}/actions:
+    post:
+      tags: [Provisioning Inputs]
+      summary: Activate or deactivate an image
+      parameters: [{name: image_id, in: path, required: true, schema: {type: string, format: uuid}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /images/{image_id}/members:
+    post:
+      tags: [Provisioning Inputs]
+      summary: Add image project access
+      parameters: [{name: image_id, in: path, required: true, schema: {type: string, format: uuid}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ProjectAccessRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /images/{image_id}/members/{project_id}:
+    delete:
+      tags: [Provisioning Inputs]
+      summary: Remove image project access
+      parameters: [{name: image_id, in: path, required: true, schema: {type: string, format: uuid}}, {name: project_id, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /flavors/{flavor_id}:
+    parameters: [{name: flavor_id, in: path, required: true, schema: {type: string}}]
+    patch:
+      tags: [Provisioning Inputs]
+      summary: Update a Flavor description
+      parameters: [{$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+    delete:
+      tags: [Provisioning Inputs]
+      summary: Delete a Flavor
+      parameters: [{$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /flavors/{flavor_id}/extra-specs:
+    put:
+      tags: [Provisioning Inputs]
+      summary: Set Flavor extra specs
+      parameters: [{name: flavor_id, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /flavors/{flavor_id}/extra-specs/{spec_key}:
+    delete:
+      tags: [Provisioning Inputs]
+      summary: Unset a Flavor extra spec
+      parameters: [{name: flavor_id, in: path, required: true, schema: {type: string}}, {name: spec_key, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /flavors/{flavor_id}/access:
+    post:
+      tags: [Provisioning Inputs]
+      summary: Add private Flavor access
+      parameters: [{name: flavor_id, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ProjectAccessRequest"}}}}
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
+  /flavors/{flavor_id}/access/{project_id}:
+    delete:
+      tags: [Provisioning Inputs]
+      summary: Remove private Flavor access
+      parameters: [{name: flavor_id, in: path, required: true, schema: {type: string}}, {name: project_id, in: path, required: true, schema: {type: string}}, {$ref: "#/components/parameters/CsrfToken"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      responses: {"202": {$ref: "#/components/responses/AcceptedOperation"}}
 components:
   headers:
     CsrfToken:
@@ -501,7 +688,17 @@ components:
       schema:
         type: string
         format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 255}
   responses:
+    AcceptedOperation:
+      description: Idempotent operation accepted
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Operation"}
     Unauthenticated:
       description: The Vantage session is missing or expired.
       content:
@@ -557,6 +754,168 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
   schemas:
+    Operation:
+      type: object
+      additionalProperties: false
+      required: [id, kind, status, submitted_at, updated_at, target, trace_id, openstack_request_ids]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string}
+        status: {type: string, enum: [accepted, running, succeeded, failed, cancelled]}
+        submitted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        target:
+          type: object
+          required: [resource_type]
+          properties:
+            resource_type: {type: string}
+            resource_id: {anyOf: [{type: string}, {type: "null"}]}
+            resource_name: {anyOf: [{type: string}, {type: "null"}]}
+        trace_id: {type: string}
+        openstack_request_ids: {type: array, items: {type: string}}
+        problem: {anyOf: [{$ref: "#/components/schemas/Problem"}, {type: "null"}]}
+    CreateInstanceRequest:
+      type: object
+      additionalProperties: false
+      required: [name, boot_source, flavor_id, networks]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        description: {type: string, maxLength: 255}
+        hostname: {type: string, maxLength: 255}
+        count: {type: integer, minimum: 1, maximum: 100, default: 1}
+        flavor_id: {type: string}
+        boot_source:
+          type: object
+          required: [type]
+          properties:
+            type: {type: string, enum: [image, volume, volume_snapshot]}
+            image_id: {type: string, format: uuid}
+            volume_id: {type: string, format: uuid}
+            snapshot_id: {type: string, format: uuid}
+            create_boot_volume: {type: boolean}
+            volume_size_gib: {type: integer, minimum: 1}
+            volume_type: {type: string}
+            delete_on_termination: {type: boolean}
+        networks:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              network_id: {type: string, format: uuid}
+              subnet_id: {type: string, format: uuid}
+              port_id: {type: string, format: uuid}
+              fixed_ip: {type: string}
+              tag: {type: string}
+        security_group_ids: {type: array, items: {type: string, format: uuid}}
+        keypair_name: {type: string}
+        availability_zone: {type: string}
+        metadata: {type: object, additionalProperties: {type: string}}
+        config_drive: {type: boolean}
+        user_data: {type: string, writeOnly: true, maxLength: 65535}
+        block_devices: {type: array, items: {type: object}}
+    UpdateInstanceRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        description: {anyOf: [{type: string}, {type: "null"}]}
+        metadata: {type: object, additionalProperties: {type: string}}
+        unset_metadata: {type: array, items: {type: string}}
+    InstanceActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: {type: string, enum: [start, stop, soft_reboot, hard_reboot, pause, unpause, suspend, resume, shelve, unshelve, rescue, unrescue, lock, unlock]}
+        image_id: {type: string, format: uuid}
+        locked_reason: {type: string, maxLength: 255}
+    ResizeRequest:
+      type: object
+      required: [flavor_id]
+      properties: {flavor_id: {type: string}}
+    RebuildRequest:
+      type: object
+      required: [image_id]
+      properties:
+        image_id: {type: string, format: uuid}
+        name: {type: string}
+        metadata: {type: object, additionalProperties: {type: string}}
+        preserve_ephemeral: {type: boolean}
+        user_data: {type: string, writeOnly: true}
+    SnapshotRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        metadata: {type: object, additionalProperties: {type: string}}
+    ConsoleRequest:
+      type: object
+      properties:
+        protocol: {type: string, const: vnc, default: vnc}
+        type: {type: string, const: novnc, default: novnc}
+    ConsoleSession:
+      type: object
+      required: [instance_id, type, url, expires_at]
+      properties:
+        instance_id: {type: string, format: uuid}
+        type: {type: string, const: novnc}
+        url: {type: string, format: uri, description: Sensitive and never persisted or logged}
+        expires_at: {type: string, format: date-time}
+        openstack_request_id: {anyOf: [{type: string}, {type: "null"}]}
+    DeletePreview:
+      type: object
+      required: [instance_id, attached_volume_ids, network_contract, floating_ip_contract, warning]
+      properties:
+        instance_id: {type: string, format: uuid}
+        attached_volume_ids: {type: array, items: {type: string}}
+        network_contract: {type: string}
+        floating_ip_contract: {type: string}
+        warning: {type: string}
+    ImageCreateRequest:
+      type: object
+      required: [name, disk_format]
+      properties:
+        name: {type: string}
+        disk_format: {type: string}
+        container_format: {type: string, default: bare}
+        visibility: {type: string, enum: [private, shared, community, public]}
+        min_disk_gib: {type: integer, minimum: 0}
+        min_ram_mib: {type: integer, minimum: 0}
+        protected: {type: boolean}
+        properties: {type: object, additionalProperties: {type: string}}
+        tags: {type: array, items: {type: string}}
+        import_uri: {type: string, format: uri}
+    ImageUpdateRequest:
+      type: object
+      properties:
+        name: {type: string}
+        visibility: {type: string, enum: [private, shared, community, public]}
+        min_disk_gib: {type: integer, minimum: 0}
+        min_ram_mib: {type: integer, minimum: 0}
+        protected: {type: boolean}
+        properties: {type: object, additionalProperties: {type: string}}
+        unset_properties: {type: array, items: {type: string}}
+        tags: {type: array, items: {type: string}}
+    FlavorCreateRequest:
+      type: object
+      required: [name, vcpus, ram_mib]
+      properties:
+        name: {type: string}
+        id: {type: string}
+        vcpus: {type: integer, minimum: 1}
+        ram_mib: {type: integer, minimum: 1}
+        disk_gib: {type: integer, minimum: 0}
+        ephemeral_gib: {type: integer, minimum: 0}
+        swap_mib: {type: integer, minimum: 0}
+        rxtx_factor: {type: number, exclusiveMinimum: 0}
+        is_public: {type: boolean}
+        description: {type: string}
+        extra_specs: {type: object, additionalProperties: {type: string}}
+        access_project_ids: {type: array, items: {type: string}}
+    ProjectAccessRequest:
+      type: object
+      required: [project_id]
+      properties: {project_id: {type: string}}
     LoginRequest:
       type: object
       additionalProperties: false
