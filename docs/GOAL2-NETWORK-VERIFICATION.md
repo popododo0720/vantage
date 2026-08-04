@@ -1,6 +1,6 @@
 # Goal 2 Network Services Verification
 
-Status: implemented; reference-cloud execution remains a release gate  
+Status: implemented; reference-cloud execution remains a release gate
 Baseline: OpenStack 2026.1
 
 ## Runtime coverage
