@@ -22,6 +22,7 @@ class Settings:
     quota_source_timeout_seconds: float = 3.0
     instance_source_timeout_seconds: float = 3.0
     provisioning_source_timeout_seconds: float = 3.0
+    network_source_timeout_seconds: float = 3.0
     openstack_sdk_thread_capacity: int = 8
     instance_cursor_ttl_seconds: int = 300
     instance_cursor_max_chains: int = 256
@@ -38,6 +39,7 @@ class Settings:
             "quota_source_timeout_seconds": self.quota_source_timeout_seconds,
             "instance_source_timeout_seconds": self.instance_source_timeout_seconds,
             "provisioning_source_timeout_seconds": self.provisioning_source_timeout_seconds,
+            "network_source_timeout_seconds": self.network_source_timeout_seconds,
             "openstack_sdk_thread_capacity": self.openstack_sdk_thread_capacity,
             "instance_cursor_ttl_seconds": self.instance_cursor_ttl_seconds,
             "instance_cursor_max_chains": self.instance_cursor_max_chains,
@@ -69,6 +71,9 @@ class Settings:
             ),
             provisioning_source_timeout_seconds=float(
                 os.getenv("VANTAGE_PROVISIONING_SOURCE_TIMEOUT_SECONDS", "3")
+            ),
+            network_source_timeout_seconds=float(
+                os.getenv("VANTAGE_NETWORK_SOURCE_TIMEOUT_SECONDS", "3")
             ),
             openstack_sdk_thread_capacity=int(
                 os.getenv("VANTAGE_OPENSTACK_SDK_THREAD_CAPACITY", "8")

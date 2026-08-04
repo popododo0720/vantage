@@ -7,7 +7,7 @@ Browser
   -> Vantage BFF
       -> openstacksdk
           -> Keystone service catalog
-              -> Nova / Neutron / Glance / Cinder
+              -> Nova / Neutron / Octavia / Glance / Cinder
 ```
 
 The browser talks only to Vantage. It never calls an OpenStack service endpoint.
@@ -40,6 +40,11 @@ token.
 - `404` and `403` are not rewritten in a way that leaks cross-project resource
   existence.
 - Vantage records the upstream request ID for authorized troubleshooting.
+- Project network routes reject shared, external, provider, and ownership
+  attributes before dispatch. OpenStack policy remains the final decision for
+  every permitted field and action, and an upstream `403` is preserved.
+- OVN chassis, northbound/southbound database, metadata-agent, binding-host,
+  and provider-topology details are removed from project-facing resources.
 
 ## Endpoint Discovery and Microversions
 

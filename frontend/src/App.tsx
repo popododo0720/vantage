@@ -12,11 +12,14 @@ import {
   parseKeyPairRoute,
 } from './inventory-route'
 import { Pagination } from './Pagination'
+import { DEFAULT_NETWORK_QUERY, networkPath, parseNetworkRoute } from './network-route'
+import { NetworkServicesPage } from './NetworkServicesPage'
 import { ImagesPage, KeyPairsPage } from './ProvisioningPages'
 import type {
   ImageQuery,
   InstanceQuery,
   InventoryQuery,
+  NetworkQuery,
   ProjectOverview,
   ProjectPage,
   Quota,
@@ -47,6 +50,7 @@ type State =
   }
   | { kind: 'images'; session: Session; query: ImageQuery; error?: ErrorInfo }
   | { kind: 'keypairs'; session: Session; query: InventoryQuery; error?: ErrorInfo }
+  | { kind: 'network'; session: Session; query: NetworkQuery; error?: ErrorInfo }
 type HistoryMode = 'push' | 'replace' | 'none'
 
 const labels = {
@@ -96,6 +100,7 @@ const labels = {
     quotaUsage: 'Quota usage',
     compute: 'Compute',
     network: 'Network',
+    networkServices: 'Network services',
     storage: 'Storage',
     all: 'All',
     quotaFilters: 'Quota service filters',
@@ -192,6 +197,7 @@ const labels = {
     quotaUsage: '쿼터 사용량',
     compute: '컴퓨트',
     network: '네트워크',
+    networkServices: '네트워크 서비스',
     storage: '스토리지',
     all: '전체',
     quotaFilters: '쿼터 서비스 필터',
@@ -259,6 +265,8 @@ function scopedState(session: Session, route = '/overview', drawerFromList = fal
   if (imageQuery) return { kind: 'images', session, query: imageQuery }
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return { kind: 'keypairs', session, query: keypairQuery }
+  const networkQuery = parseNetworkRoute(url.href)
+  if (networkQuery) return { kind: 'network', session, query: networkQuery }
   const instanceRoute = parseInstanceRoute(url.href)
   if (instanceRoute) {
     return {
@@ -283,6 +291,7 @@ function pathForState(state: State): string {
   if (state.kind === 'instances') return instancePath(state.query, state.selectedId)
   if (state.kind === 'images') return imagePath(state.query)
   if (state.kind === 'keypairs') return keyPairPath(state.query)
+  if (state.kind === 'network') return networkPath(state.query)
   return window.location.pathname
 }
 
@@ -296,6 +305,8 @@ function safeReturnUrl(value: unknown): string | undefined {
   if (imageQuery) return imagePath(imageQuery)
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return keyPairPath(keypairQuery)
+  const networkQuery = parseNetworkRoute(url.href)
+  if (networkQuery) return networkPath(networkQuery)
   if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
   if (url.pathname === '/quotas' && url.searchParams.has('service')) {
     const service = url.searchParams.get('service')
@@ -322,6 +333,7 @@ function sessionForState(state: State): Session | undefined {
     || state.kind === 'instances'
     || state.kind === 'images'
     || state.kind === 'keypairs'
+    || state.kind === 'network'
     ? state.session
     : undefined
 }
@@ -417,7 +429,11 @@ export function App() {
         next = scopedState(session, currentUrl())
       } else if (parseInstanceRoute(window.location.href) && session?.active_scope) {
         next = scopedState(session, currentUrl(), Boolean(window.history.state?.instanceDrawer))
-      } else if ((parseImageRoute(window.location.href) || parseKeyPairRoute(window.location.href)) && session?.active_scope) {
+      } else if ((
+        parseImageRoute(window.location.href)
+        || parseKeyPairRoute(window.location.href)
+        || parseNetworkRoute(window.location.href)
+      ) && session?.active_scope) {
         next = scopedState(session, currentUrl())
       }
       if (next) transition(next, 'none')
@@ -448,6 +464,7 @@ export function App() {
       && state.kind !== 'instances'
       && state.kind !== 'images'
       && state.kind !== 'keypairs'
+      && state.kind !== 'network'
     ) return
     try {
       const session = await api.locale(next)
@@ -525,6 +542,7 @@ export function App() {
       selectedInstanceId={state.kind === 'instances' ? state.selectedId : undefined}
       imageQuery={state.kind === 'images' ? state.query : DEFAULT_IMAGE_QUERY}
       keypairQuery={state.kind === 'keypairs' ? state.query : DEFAULT_KEYPAIR_QUERY}
+      networkQuery={state.kind === 'network' ? state.query : DEFAULT_NETWORK_QUERY}
       onNavigate={(view, filter = 'all') => {
         if (view === 'quotas') transition({ kind: 'quotas', session: state.session, filter })
         else if (view === 'instances') {
@@ -538,6 +556,8 @@ export function App() {
           transition({ kind: 'images', session: state.session, query: DEFAULT_IMAGE_QUERY })
         } else if (view === 'keypairs') {
           transition({ kind: 'keypairs', session: state.session, query: DEFAULT_KEYPAIR_QUERY })
+        } else if (view === 'network') {
+          transition({ kind: 'network', session: state.session, query: DEFAULT_NETWORK_QUERY })
         } else transition({ kind: 'overview', session: state.session })
       }}
       onInstanceQuery={(query, mode) => {
@@ -565,6 +585,9 @@ export function App() {
       }}
       onKeyPairQuery={(query, mode) => {
         if (state.kind === 'keypairs') transition({ ...state, query }, mode)
+      }}
+      onNetworkQuery={(query, mode) => {
+        if (state.kind === 'network') transition({ ...state, query }, mode)
       }}
       onSwitch={() => {
         pendingSafeRoute.current = state.kind === 'instances'
@@ -993,12 +1016,14 @@ function ProjectWorkspace({
   selectedInstanceId,
   imageQuery,
   keypairQuery,
+  networkQuery,
   onNavigate,
   onInstanceQuery,
   onInstanceOpen,
   onInstanceClose,
   onImageQuery,
   onKeyPairQuery,
+  onNetworkQuery,
   onSwitch,
   onExpired,
   onLogout,
@@ -1008,18 +1033,20 @@ function ProjectWorkspace({
   language: ReactNode
   session: Session
   error?: ErrorInfo
-  view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs'
+  view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs' | 'network'
   filter: QuotaFilter
   instanceQuery: InstanceQuery
   selectedInstanceId?: string
   imageQuery: ImageQuery
   keypairQuery: InventoryQuery
-  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs', filter?: QuotaFilter) => void
+  networkQuery: NetworkQuery
+  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs' | 'network', filter?: QuotaFilter) => void
   onInstanceQuery: (query: InstanceQuery, mode: 'push' | 'replace') => void
   onInstanceOpen: (instanceId: string) => void
   onInstanceClose: () => void
   onImageQuery: (query: ImageQuery, mode: 'push' | 'replace') => void
   onKeyPairQuery: (query: InventoryQuery, mode: 'push' | 'replace') => void
+  onNetworkQuery: (query: NetworkQuery, mode: 'push' | 'replace') => void
   onSwitch: () => void
   onExpired: () => void
   onLogout: () => void
@@ -1116,6 +1143,18 @@ function ProjectWorkspace({
         >
           {t.keypairs}
         </a>
+        <strong>{t.network}</strong>
+        <a
+          href="/network/network"
+          className={view === 'network' ? 'selected' : undefined}
+          aria-current={view === 'network' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('network')
+          }}
+        >
+          {t.networkServices}
+        </a>
       </aside>
       <main className="content">
         <ErrorNotice error={message ?? error} referenceLabel={t.requestReference} />
@@ -1157,12 +1196,20 @@ function ProjectWorkspace({
             onQuery={onImageQuery}
             onExpired={onExpired}
           />
-        ) : (
+        ) : view === 'keypairs' ? (
           <KeyPairsPage
             scopeKey={`${scope.project.id}:${scope.region}`}
             locale={locale}
             query={keypairQuery}
             onQuery={onKeyPairQuery}
+            onExpired={onExpired}
+          />
+        ) : (
+          <NetworkServicesPage
+            scopeKey={`${scope.project.id}:${scope.region}`}
+            locale={locale}
+            query={networkQuery}
+            onQuery={onNetworkQuery}
             onExpired={onExpired}
           />
         )}

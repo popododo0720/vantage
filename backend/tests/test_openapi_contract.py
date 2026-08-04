@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import yaml
-from fastapi.routing import APIRoute
 from openapi_spec_validator import validate
 from vantage_bff.app import create_app
 
@@ -26,11 +25,13 @@ def test_runtime_routes_match_the_published_contract() -> None:
         for method in path_item
         if method in HTTP_METHODS
     }
+    runtime_document = create_app().openapi()
     runtime_routes = {
-        (route.path, method)
-        for route in create_app().routes
-        if isinstance(route, APIRoute) and route.path.startswith("/api/v1")
-        for method in route.methods
+        (path, method.upper())
+        for path, path_item in runtime_document["paths"].items()
+        if path.startswith("/api/v1")
+        for method in path_item
+        if method in HTTP_METHODS
     }
 
     assert runtime_routes == contract_routes

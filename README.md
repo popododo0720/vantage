@@ -24,11 +24,12 @@ a big-bang release.
 Goal 1 is the active release target. Later goals may be developed in isolated,
 verifiable slices while the preceding release is exercised.
 
-## Goal 1 development
+## Runtime development
 
 The runnable application contains a FastAPI BFF and React/TypeScript browser
 application for login, current session, logout, accessible projects,
-project/region selection, a quota-first overview, and quota details. The
+project/region selection, a quota-first overview, quota details, and the Goal 2
+Neutron/Octavia resource workspace. The
 default adapter is a credential-free fake; use username `alice` (or `limited`)
 and password `vantage` locally.
 
@@ -79,6 +80,8 @@ measured value. Quota widgets have a shorter independent boundary controlled by
 list/detail calls use `VANTAGE_INSTANCE_SOURCE_TIMEOUT_SECONDS`; image, flavor,
 key-pair, network, and security-group inventory calls use
 `VANTAGE_PROVISIONING_SOURCE_TIMEOUT_SECONDS`. Both default to 3 seconds.
+Goal 2 Neutron and Octavia reads and mutations use the independent
+`VANTAGE_NETWORK_SOURCE_TIMEOUT_SECONDS` boundary, also defaulting to 3 seconds.
 Blocking OpenStack SDK work is limited by
 `VANTAGE_OPENSTACK_SDK_THREAD_CAPACITY` (default `8`); timed-out work retains
 its slot until the underlying thread exits.
@@ -139,6 +142,7 @@ server session retains the Keystone membership snapshot used for scope checks.
 - [MVP planning and design readiness](docs/MVP-READINESS.md)
 - [Penpot design completion audit](docs/DESIGN-QA.md)
 - [Goal 1.3 quota overview verification](docs/GOAL1-3-VERIFICATION.md)
+- [Goal 2 network services verification](docs/GOAL2-NETWORK-VERIFICATION.md)
 - [Implemented BFF OpenAPI](api/openapi.yaml)
 - [Planned Goal 1 MVP OpenAPI](api/openapi.goal1-mvp.yaml)
 

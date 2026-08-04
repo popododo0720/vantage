@@ -43,6 +43,16 @@ use. Visual improvement without measurable latency improvement is not enough.
   cancelled request keeps its slot until the underlying SDK thread exits, so
   repeated upstream stalls cannot create an unbounded executor queue.
 
+### Network inventory invariant
+
+- Neutron and Octavia list requests send the selected page size plus one
+  look-ahead item and return at most 10, 25, 50, or 100 visible rows.
+- Name, status, parent, QoS rule type, and resource-specific filters are sent
+  upstream; the browser never downloads a full collection to filter it.
+- Every read and mutation has an independent network-source timeout. Timeout,
+  policy denial, dependency conflict, and rate limiting retain distinct
+  `504`, `403`, `409`, and `429` responses and upstream request IDs.
+
 ## Initial Timeout Budget
 
 | Dependency | Timeout |
@@ -50,6 +60,7 @@ use. Visual improvement without measurable latency improvement is not enough.
 | Session/Keystone | 2 s |
 | Nova list/detail | 3 s |
 | Neutron list | 3 s |
+| Octavia list/mutation | 3 s |
 | Glance/Cinder list | 3 s |
 | Entire overview deadline | 4 s |
 

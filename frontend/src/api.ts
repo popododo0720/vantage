@@ -6,12 +6,18 @@ import type {
   ImageQuery,
   InventoryQuery,
   KeyPairPage,
+  NetworkCapabilities,
+  NetworkQuery,
+  NetworkResource,
+  NetworkResourcePage,
+  Operation,
   Problem,
   ProjectOverview,
   ProjectPage,
   QuotaPayload,
   QuotaService,
   Session,
+  ResourceKind,
 } from './types'
 
 let csrfToken = ''
@@ -135,6 +141,91 @@ export const api = {
   },
   instance: (instanceId: string, signal?: AbortSignal) =>
     request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),
+  networkCapabilities: (signal?: AbortSignal) =>
+    request<NetworkCapabilities>('/network/capabilities', { signal }),
+  networkResources: (filters: NetworkQuery, signal?: AbortSignal) => {
+    const query = new URLSearchParams({
+      limit: String(filters.limit),
+      page: String(filters.page),
+    })
+    if (filters.name) query.set('name', filters.name)
+    if (filters.status) query.set('status', filters.status)
+    if (filters.parentId) query.set('parent_id', filters.parentId)
+    if (filters.ruleType) query.set('rule_type', filters.ruleType)
+    return request<NetworkResourcePage>(
+      `/network/resources/${filters.kind}?${query}`,
+      { signal },
+    )
+  },
+  networkResource: (kind: ResourceKind, id: string, parentId = '', ruleType = '') => {
+    const parameters = new URLSearchParams()
+    if (parentId) parameters.set('parent_id', parentId)
+    if (ruleType) parameters.set('rule_type', ruleType)
+    const query = parameters.size ? `?${parameters}` : ''
+    return request<NetworkResource>(
+      `/network/resources/${kind}/${encodeURIComponent(id)}${query}`,
+    )
+  },
+  createNetworkResource: (
+    kind: ResourceKind,
+    attributes: Record<string, unknown>,
+    parentId: string,
+  ) => request<Operation>(`/network/resources/${kind}`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify({ attributes, parent_id: parentId || null }),
+  }),
+  updateNetworkResource: (
+    resource: NetworkResource,
+    attributes: Record<string, unknown>,
+    parentId: string,
+    ruleType = '',
+  ) => request<Operation>(
+    `/network/resources/${resource.resource_type}/${encodeURIComponent(resource.id)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        attributes,
+        parent_id: parentId || null,
+        rule_type: ruleType || null,
+        revision_number: resource.revision_number,
+      }),
+    },
+  ),
+  deleteNetworkResource: (resource: NetworkResource, parentId: string, ruleType = '', cascade = false) =>
+    request<Operation>(
+      `/network/resources/${resource.resource_type}/${encodeURIComponent(resource.id)}/delete`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({
+          confirmation: resource.name || resource.id,
+          parent_id: parentId || null,
+          rule_type: ruleType || null,
+          revision_number: resource.revision_number,
+          cascade,
+        }),
+      },
+    ),
+  runNetworkAction: (
+    resource: NetworkResource,
+    action: string,
+    parameters: Record<string, unknown>,
+  ) => request<Operation>(
+    `/network/resources/${resource.resource_type}/${encodeURIComponent(resource.id)}/actions`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        action,
+        parameters,
+        revision_number: resource.revision_number,
+      }),
+    },
+  ),
+  networkOperation: (operationId: string) =>
+    request<Operation>(`/network/operations/${encodeURIComponent(operationId)}`),
   logout: async () => {
     await request<void>('/session', { method: 'DELETE' })
     csrfToken = ''

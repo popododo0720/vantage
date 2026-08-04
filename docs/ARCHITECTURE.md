@@ -1,8 +1,8 @@
 # Vantage Application Architecture
 
-Status: planning contract
+Status: implemented runtime contract
 Baseline: OpenStack 2026.1
-Implementation: Goal 1.3 quota-first overview
+Implementation: Goal 1 project foundation and Goal 2 network services
 
 ## Objectives
 
@@ -181,6 +181,9 @@ check alone.
   namespace survives locale-only session rotation, while project switch,
   logout, and upstream authentication failure invalidate cursor chains.
 - Goal 2 expands full project networking.
+- Goal 2's runtime exposes bounded, capability-driven Neutron and Octavia
+  resources through `/api/v1/network`; Octavia resources disappear when the
+  service is absent from the active catalog.
 - Goal 3 expands project storage depth.
 - Goal 4 enables administrator and Identity workflows.
 - Goal 5+ adds catalog-discovered services.

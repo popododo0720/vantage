@@ -16,6 +16,7 @@ from vantage_bff.adapters.base import (
     ScopeResult,
     normalized_quota,
 )
+from vantage_bff.adapters.fake_network import FakeNetworkServicesAdapter
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -47,6 +48,9 @@ class FakeOpenStackAdapter:
         Project(id="project-alpha", name="Alpha", domain_id="default", enabled=True),
         Project(id="project-beta", name="Beta", domain_id="default", enabled=True),
     )
+
+    def __init__(self) -> None:
+        self.network_services = FakeNetworkServicesAdapter()
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         if password != "vantage":

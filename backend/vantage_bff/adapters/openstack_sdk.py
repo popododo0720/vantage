@@ -17,6 +17,7 @@ from vantage_bff.adapters.base import (
     ScopeResult,
     normalized_quota,
 )
+from vantage_bff.adapters.openstack_network import OpenStackNetworkServicesAdapter
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -102,6 +103,7 @@ class OpenStackSdkAdapter:
         quota_timeout_seconds: float | None = None,
         instance_timeout_seconds: float | None = None,
         provisioning_timeout_seconds: float | None = None,
+        network_timeout_seconds: float | None = None,
         thread_capacity: int = 8,
     ) -> None:
         self.auth_url = auth_url
@@ -113,7 +115,18 @@ class OpenStackSdkAdapter:
         self.provisioning_timeout_seconds = (
             provisioning_timeout_seconds or float(request_timeout_seconds)
         )
+        self.network_timeout_seconds = network_timeout_seconds or float(request_timeout_seconds)
         self._sdk_threads = _BoundedToThreadRunner(thread_capacity)
+        self.network_services = OpenStackNetworkServicesAdapter(
+            self._sdk_threads,
+            lambda auth_context, project_id, region, correlation_id: self._project_connection(
+                auth_context,
+                project_id,
+                region,
+                correlation_id,
+                request_timeout_seconds=self.network_timeout_seconds,
+            ),
+        )
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         return await self._sdk_threads.run(self._authenticate, username, password, domain)

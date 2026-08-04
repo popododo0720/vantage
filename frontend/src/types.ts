@@ -163,3 +163,87 @@ export interface InstanceSummary {
 export interface ProjectOverview extends QuotaPayload {
   instance_summary: InstanceSummary | null
 }
+
+export type ResourceKind =
+  | 'network'
+  | 'subnet'
+  | 'port'
+  | 'router'
+  | 'floating_ip'
+  | 'security_group'
+  | 'security_group_rule'
+  | 'qos_policy'
+  | 'qos_rule'
+  | 'rbac_policy'
+  | 'load_balancer'
+  | 'listener'
+  | 'pool'
+  | 'member'
+  | 'health_monitor'
+  | 'l7_policy'
+  | 'l7_rule'
+
+export interface NetworkQuery extends InventoryQuery {
+  kind: ResourceKind
+  name: string
+  status: string
+  parentId: string
+  ruleType: string
+}
+
+export interface NetworkResource {
+  id: string
+  resource_type: ResourceKind
+  name: string | null
+  project_id: string | null
+  status: string | null
+  provisioning_status: string | null
+  operating_status: string | null
+  revision_number: number | null
+  created_at: string | null
+  updated_at: string | null
+  attributes: Record<string, unknown>
+  openstack_request_id?: string | null
+}
+
+export interface NetworkResourcePage {
+  items: NetworkResource[]
+  page: PageInfo
+}
+
+export interface NetworkField {
+  name: string
+  create: boolean
+  update: boolean
+  required: boolean
+  admin_only: boolean
+  extension: string | null
+  immutable_reason_en: string | null
+  immutable_reason_ko: string | null
+}
+
+export interface NetworkResourceContract {
+  resource_type: ResourceKind
+  service: 'network' | 'load-balancer'
+  available: boolean
+  parent_required: boolean
+  fields: NetworkField[]
+  actions: string[]
+}
+
+export interface NetworkCapabilities {
+  neutron: boolean
+  octavia: boolean
+  resources: NetworkResourceContract[]
+}
+
+export interface Operation {
+  id: string
+  kind: string
+  status: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  resource_type: string
+  resource_id: string | null
+  resource_name: string | null
+  openstack_request_ids: string[]
+  problem?: { detail: string; code: string; openstack_request_id?: string | null } | null
+}

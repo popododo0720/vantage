@@ -51,6 +51,7 @@ from vantage_bff.models import (
     SortDirection,
     WidgetError,
 )
+from vantage_bff.network_router import create_network_router
 from vantage_bff.operations import MemoryOperationStore, OperationStore
 from vantage_bff.rate_limit import LoginRateLimiter
 from vantage_bff.sessions import (
@@ -109,6 +110,7 @@ def _adapter(settings: Settings) -> OpenStackAdapter:
             quota_timeout_seconds=settings.quota_source_timeout_seconds,
             instance_timeout_seconds=settings.instance_source_timeout_seconds,
             provisioning_timeout_seconds=settings.provisioning_source_timeout_seconds,
+            network_timeout_seconds=settings.network_source_timeout_seconds,
             thread_capacity=settings.openstack_sdk_thread_capacity,
         )
     raise RuntimeError(f"Unsupported adapter: {settings.adapter}")
@@ -128,6 +130,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = active_settings
         app.state.adapter = adapter or _adapter(active_settings)
+        app.state.network_adapter = getattr(app.state.adapter, "network_services", None)
         app.state.sessions = store or MemorySessionStore()
         app.state.instance_cursors = cursor_store or MemoryCursorStore(
             active_settings.instance_cursor_ttl_seconds,
@@ -145,6 +148,7 @@ def create_app(
         yield
 
     app = FastAPI(title="Vantage BFF", version="0.3.0", lifespan=lifespan)
+    app.include_router(create_network_router(ApiError))
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -1314,6 +1318,7 @@ def create_app(
         @app.get("/instances/{instance_id}", include_in_schema=False)
         @app.get("/images", include_in_schema=False)
         @app.get("/keypairs", include_in_schema=False)
+        @app.get("/network/{resource_kind}", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")
 

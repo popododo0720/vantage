@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Vantage BFF API
-  version: 0.3.0
-  summary: Implemented session, project-scope, quota, and instance inventory API
+  version: 0.4.0
+  summary: Implemented session, compute inventory, Neutron, and Octavia API
   description: |
     Browser-facing API implemented by the current Vantage runtime. The browser
     never receives an OpenStack token or calls an OpenStack service endpoint
@@ -25,6 +25,8 @@ tags:
     description: Bounded, project-scoped Nova inventory and instance details.
   - name: Provisioning Inputs
     description: Bounded, project-scoped inventories used to provision instances.
+  - name: Network Services
+    description: Project Neutron lifecycle and catalog-gated Octavia lifecycle.
 paths:
   /session:
     get:
@@ -451,6 +453,219 @@ paths:
           $ref: "#/components/responses/GatewayTimeout"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+  /network/capabilities:
+    get:
+      tags: [Network Services]
+      summary: Discover Neutron and Octavia resource contracts
+      operationId: getNetworkCapabilities
+      responses:
+        "200":
+          description: Capability and field registry for the active project and region.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NetworkCapabilities"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+  /network/resources/{kind}:
+    get:
+      tags: [Network Services]
+      summary: List one Neutron or Octavia resource type
+      description: |
+        Uses a scope- and query-bound server cursor chain. Octavia resource
+        kinds are unavailable when the load-balancer service is absent from
+        the active Keystone catalog.
+      operationId: listNetworkResources
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - $ref: "#/components/parameters/ParentId"
+        - {name: name, in: query, schema: {type: string, maxLength: 255}}
+        - {name: status, in: query, schema: {type: string, maxLength: 64}}
+        - {name: network_id, in: query, schema: {type: string, maxLength: 255}}
+        - name: rule_type
+          in: query
+          description: Required for QoS rule collections.
+          schema:
+            type: string
+            enum: [bandwidth_limit, dscp_marking, minimum_bandwidth, minimum_packet_rate, packet_rate_limit]
+      responses:
+        "200":
+          description: Bounded server-filtered resource page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NetworkResourcePage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+    post:
+      tags: [Network Services]
+      summary: Create a Neutron or Octavia resource
+      operationId: createNetworkResource
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResourceMutationRequest"}
+      responses:
+        "202":
+          description: Scope-bound asynchronous operation accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /network/resources/{kind}/{resource_id}:
+    get:
+      tags: [Network Services]
+      summary: Get one Neutron or Octavia resource
+      operationId: getNetworkResource
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/NetworkResourceId"
+        - $ref: "#/components/parameters/ParentId"
+        - {name: rule_type, in: query, schema: {type: string, maxLength: 64}}
+      responses:
+        "200":
+          description: Project-visible resource detail with request correlation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NetworkResource"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+    patch:
+      tags: [Network Services]
+      summary: Edit mutable Neutron or Octavia fields
+      operationId: updateNetworkResource
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/NetworkResourceId"
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResourceMutationRequest"}
+      responses:
+        "202":
+          description: Scope-bound asynchronous operation accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /network/resources/{kind}/{resource_id}/delete-preview:
+    get:
+      tags: [Network Services]
+      summary: Preview bounded dependencies before deletion
+      operationId: previewNetworkResourceDelete
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/NetworkResourceId"
+        - $ref: "#/components/parameters/ParentId"
+        - {name: rule_type, in: query, schema: {type: string, maxLength: 64}}
+      responses:
+        "200":
+          description: Resource identity, dependencies, and confirmation value.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeletePreview"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /network/resources/{kind}/{resource_id}/delete:
+    post:
+      tags: [Network Services]
+      summary: Delete a Neutron or Octavia resource
+      operationId: deleteNetworkResource
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/NetworkResourceId"
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResourceDeleteRequest"}
+      responses:
+        "202":
+          description: Scope-bound asynchronous operation accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /network/resources/{kind}/{resource_id}/actions:
+    post:
+      tags: [Network Services]
+      summary: Run a relationship or lifecycle action
+      description: |
+        Covers NIC attach/detach, fixed IP add/remove, router interface and
+        gateway actions, Floating IP association, and load-balancer failover.
+      operationId: runNetworkResourceAction
+      parameters:
+        - $ref: "#/components/parameters/NetworkResourceKind"
+        - $ref: "#/components/parameters/NetworkResourceId"
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResourceActionRequest"}
+      responses:
+        "202":
+          description: Scope-bound asynchronous operation accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /network/operations/{operation_id}:
+    get:
+      tags: [Network Services]
+      summary: Get a project-scoped network operation
+      operationId: getNetworkOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Current operation state and OpenStack request IDs.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
 components:
   headers:
     CsrfToken:
@@ -501,6 +716,28 @@ components:
       schema:
         type: string
         format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Scope-bound mutation identity; reuse with another payload conflicts.
+      schema: {type: string, minLength: 1, maxLength: 255}
+    NetworkResourceKind:
+      name: kind
+      in: path
+      required: true
+      schema: {$ref: "#/components/schemas/NetworkResourceKind"}
+    NetworkResourceId:
+      name: resource_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 255}
+    ParentId:
+      name: parent_id
+      in: query
+      required: false
+      description: Required for QoS rules, pool members, and L7 rules.
+      schema: {type: string, maxLength: 255}
   responses:
     Unauthenticated:
       description: The Vantage session is missing or expired.
@@ -557,6 +794,152 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
   schemas:
+    NetworkResourceKind:
+      type: string
+      enum:
+        - network
+        - subnet
+        - port
+        - router
+        - floating_ip
+        - security_group
+        - security_group_rule
+        - qos_policy
+        - qos_rule
+        - rbac_policy
+        - load_balancer
+        - listener
+        - pool
+        - member
+        - health_monitor
+        - l7_policy
+        - l7_rule
+    NetworkResource:
+      type: object
+      additionalProperties: false
+      required: [id, resource_type, name, project_id, status, provisioning_status, operating_status, revision_number, created_at, updated_at, attributes]
+      properties:
+        id: {type: string}
+        resource_type: {$ref: "#/components/schemas/NetworkResourceKind"}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        project_id: {anyOf: [{type: string}, {type: "null"}]}
+        status: {anyOf: [{type: string}, {type: "null"}]}
+        provisioning_status: {anyOf: [{type: string}, {type: "null"}]}
+        operating_status: {anyOf: [{type: string}, {type: "null"}]}
+        revision_number: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        created_at: {anyOf: [{type: string, format: date-time}, {type: "null"}]}
+        updated_at: {anyOf: [{type: string, format: date-time}, {type: "null"}]}
+        attributes:
+          type: object
+          additionalProperties: true
+          description: Capability-filtered OpenStack fields; OVN implementation data is excluded.
+        openstack_request_id: {anyOf: [{type: string}, {type: "null"}]}
+    NetworkResourcePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/NetworkResource"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    NetworkField:
+      type: object
+      additionalProperties: false
+      required: [name, create, update, required, admin_only, extension, immutable_reason_en, immutable_reason_ko]
+      properties:
+        name: {type: string}
+        create: {type: boolean}
+        update: {type: boolean}
+        required: {type: boolean}
+        admin_only: {type: boolean}
+        extension: {anyOf: [{type: string}, {type: "null"}]}
+        immutable_reason_en: {anyOf: [{type: string}, {type: "null"}]}
+        immutable_reason_ko: {anyOf: [{type: string}, {type: "null"}]}
+    NetworkResourceContract:
+      type: object
+      additionalProperties: false
+      required: [resource_type, service, available, parent_required, fields, actions]
+      properties:
+        resource_type: {$ref: "#/components/schemas/NetworkResourceKind"}
+        service: {type: string, enum: [network, load-balancer]}
+        available: {type: boolean}
+        parent_required: {type: boolean}
+        fields: {type: array, items: {$ref: "#/components/schemas/NetworkField"}}
+        actions: {type: array, items: {type: string}}
+    NetworkCapabilities:
+      type: object
+      additionalProperties: false
+      required: [neutron, octavia, resources]
+      properties:
+        neutron: {type: boolean}
+        octavia: {type: boolean}
+        resources: {type: array, items: {$ref: "#/components/schemas/NetworkResourceContract"}}
+    ResourceMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [attributes]
+      properties:
+        parent_id: {anyOf: [{type: string}, {type: "null"}]}
+        rule_type: {anyOf: [{type: string, maxLength: 64}, {type: "null"}]}
+        attributes: {type: object, additionalProperties: true}
+        revision_number: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+    ResourceActionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, parameters]
+      properties:
+        action: {type: string, minLength: 1, maxLength: 64}
+        parameters: {type: object, additionalProperties: true}
+        revision_number: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+    ResourceDeleteRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: {type: string, minLength: 1, maxLength: 255}
+        parent_id: {anyOf: [{type: string}, {type: "null"}]}
+        rule_type: {anyOf: [{type: string, maxLength: 64}, {type: "null"}]}
+        revision_number: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        cascade: {type: boolean, default: false}
+    DeletePreview:
+      type: object
+      additionalProperties: false
+      required: [resource, dependencies, confirmation_value]
+      properties:
+        resource: {$ref: "#/components/schemas/NetworkResource"}
+        dependencies:
+          type: array
+          maxItems: 100
+          items: {type: object, additionalProperties: {type: string}}
+        confirmation_value: {type: string}
+    OperationProblem:
+      type: object
+      additionalProperties: false
+      required: [status, code, title, detail]
+      properties:
+        status: {type: integer}
+        code: {type: string}
+        title: {type: string}
+        detail: {type: string}
+        openstack_request_id: {anyOf: [{type: string}, {type: "null"}]}
+    Operation:
+      type: object
+      additionalProperties: false
+      required: [id, kind, status, submitted_at, updated_at, resource_type, resource_id, resource_name, trace_id, openstack_request_ids, problem]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string}
+        status: {type: string, enum: [accepted, running, succeeded, failed, cancelled]}
+        submitted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        resource_type: {type: string}
+        resource_id: {anyOf: [{type: string}, {type: "null"}]}
+        resource_name: {anyOf: [{type: string}, {type: "null"}]}
+        trace_id: {type: string}
+        openstack_request_ids: {type: array, items: {type: string}, uniqueItems: true}
+        problem:
+          anyOf:
+            - {$ref: "#/components/schemas/OperationProblem"}
+            - {type: "null"}
     LoginRequest:
       type: object
       additionalProperties: false
