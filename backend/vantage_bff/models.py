@@ -51,6 +51,7 @@ class SessionResponse(StrictModel):
     expires_at: datetime
     regions: list[str]
     locale: str
+    admin_available: bool = False
 
 
 class PageInfo(StrictModel):

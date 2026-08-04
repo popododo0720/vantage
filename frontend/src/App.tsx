@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
+import { AdminWorkspace } from './AdminPage'
+import type { AdminSection } from './AdminPage'
 import { ApiError, api } from './api'
 import { DEFAULT_INSTANCE_QUERY, instancePath, parseInstanceRoute } from './instance-route'
 import { InstancesPage } from './InstancesPage'
@@ -47,6 +49,7 @@ type State =
   }
   | { kind: 'images'; session: Session; query: ImageQuery; error?: ErrorInfo }
   | { kind: 'keypairs'; session: Session; query: InventoryQuery; error?: ErrorInfo }
+  | { kind: 'admin'; session: Session; section: AdminSection; error?: ErrorInfo }
 type HistoryMode = 'push' | 'replace' | 'none'
 
 const labels = {
@@ -249,9 +252,18 @@ function quotaFilter(value: string | null): QuotaFilter {
   return value === 'compute' || value === 'network' || value === 'storage' ? value : 'all'
 }
 
+function adminSection(pathname: string): AdminSection {
+  const value = pathname.split('/')[2]
+  return value === 'users' || value === 'groups' || value === 'roles'
+    || value === 'assignments' || value === 'quotas' ? value : 'projects'
+}
+
 function scopedState(session: Session, route = '/overview', drawerFromList = false): State {
-  if (!session.active_scope) return { kind: 'projects', session }
   const url = new URL(route, window.location.origin)
+  if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+    return { kind: 'admin', session, section: adminSection(url.pathname) }
+  }
+  if (!session.active_scope) return { kind: 'projects', session }
   if (url.pathname === '/quotas') {
     return { kind: 'quotas', session, filter: quotaFilter(url.searchParams.get('service')) }
   }
@@ -283,6 +295,7 @@ function pathForState(state: State): string {
   if (state.kind === 'instances') return instancePath(state.query, state.selectedId)
   if (state.kind === 'images') return imagePath(state.query)
   if (state.kind === 'keypairs') return keyPairPath(state.query)
+  if (state.kind === 'admin') return `/admin/${state.section}`
   return window.location.pathname
 }
 
@@ -296,6 +309,9 @@ function safeReturnUrl(value: unknown): string | undefined {
   if (imageQuery) return imagePath(imageQuery)
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return keyPairPath(keypairQuery)
+  if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+    return `/admin/${adminSection(url.pathname)}`
+  }
   if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
   if (url.pathname === '/quotas' && url.searchParams.has('service')) {
     const service = url.searchParams.get('service')
@@ -322,6 +338,7 @@ function sessionForState(state: State): Session | undefined {
     || state.kind === 'instances'
     || state.kind === 'images'
     || state.kind === 'keypairs'
+    || state.kind === 'admin'
     ? state.session
     : undefined
 }
@@ -373,7 +390,8 @@ export function App() {
   }, [])
 
   const enterSession = useCallback((session: Session, mode: HistoryMode = 'replace') => {
-    const returnTo = session.active_scope ? pendingSafeRoute.current : undefined
+    const candidate = pendingSafeRoute.current
+    const returnTo = session.active_scope || candidate?.startsWith('/admin') ? candidate : undefined
     const next = scopedState(session, returnTo ?? '/overview')
     if (returnTo) pendingSafeRoute.current = undefined
     transition(next, mode, returnTo)
@@ -419,6 +437,8 @@ export function App() {
         next = scopedState(session, currentUrl(), Boolean(window.history.state?.instanceDrawer))
       } else if ((parseImageRoute(window.location.href) || parseKeyPairRoute(window.location.href)) && session?.active_scope) {
         next = scopedState(session, currentUrl())
+      } else if ((window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')) && session) {
+        next = scopedState(session, currentUrl())
       }
       if (next) transition(next, 'none')
       else window.history.replaceState({}, '', pathForState(current))
@@ -448,6 +468,7 @@ export function App() {
       && state.kind !== 'instances'
       && state.kind !== 'images'
       && state.kind !== 'keypairs'
+      && state.kind !== 'admin'
     ) return
     try {
       const session = await api.locale(next)
@@ -512,6 +533,25 @@ export function App() {
       />
     )
   }
+  if (state.kind === 'admin') {
+    return (
+      <AdminWorkspace
+        session={state.session}
+        locale={locale}
+        language={language}
+        section={state.section}
+        onSection={(section) => transition({ ...state, section })}
+        onBack={() => transition(state.session.active_scope
+          ? { kind: 'overview', session: state.session }
+          : { kind: 'projects', session: state.session })}
+        onExpired={expire}
+        onLogout={() => {
+          pendingSafeRoute.current = undefined
+          transition({ kind: 'login' }, 'replace')
+        }}
+      />
+    )
+  }
   return (
     <ProjectWorkspace
       t={t}
@@ -566,6 +606,7 @@ export function App() {
       onKeyPairQuery={(query, mode) => {
         if (state.kind === 'keypairs') transition({ ...state, query }, mode)
       }}
+      onAdmin={() => transition({ kind: 'admin', session: state.session, section: 'projects' })}
       onSwitch={() => {
         pendingSafeRoute.current = state.kind === 'instances'
           ? instancePath(state.query)
@@ -999,6 +1040,7 @@ function ProjectWorkspace({
   onInstanceClose,
   onImageQuery,
   onKeyPairQuery,
+  onAdmin,
   onSwitch,
   onExpired,
   onLogout,
@@ -1020,6 +1062,7 @@ function ProjectWorkspace({
   onInstanceClose: () => void
   onImageQuery: (query: ImageQuery, mode: 'push' | 'replace') => void
   onKeyPairQuery: (query: InventoryQuery, mode: 'push' | 'replace') => void
+  onAdmin: () => void
   onSwitch: () => void
   onExpired: () => void
   onLogout: () => void
@@ -1027,6 +1070,7 @@ function ProjectWorkspace({
   const scope = session.active_scope!
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState<ErrorInfo>()
+  const adminAvailable = session.admin_available === true
 
   async function logout() {
     setPending(true)
@@ -1116,6 +1160,14 @@ function ProjectWorkspace({
         >
           {t.keypairs}
         </a>
+        {adminAvailable && (
+          <>
+            <strong>Administration</strong>
+            <a href="/admin/projects" onClick={(event) => { event.preventDefault(); onAdmin() }}>
+              {locale === 'ko' ? '관리자 작업공간' : 'Administrator workspace'}
+            </a>
+          </>
+        )}
       </aside>
       <main className="content">
         <ErrorNotice error={message ?? error} referenceLabel={t.requestReference} />

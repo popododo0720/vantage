@@ -193,6 +193,37 @@ input[aria-invalid="true"] { border-color: #c72b3a; background: #fff7f8; }
 .volume-list li { display: grid; gap: 4px; }
 .volume-list small { color: #66717d; overflow-wrap: anywhere; }
 .drawer-request-reference { padding: 0 26px 22px; }
+.admin-shell .admin-back { margin-top: auto; }
+.admin-scope-select { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.admin-scope-select select { min-width: 210px; }
+.admin-resource-page { display: grid; gap: 18px; width: min(100%, 1320px); }
+.admin-toolbar { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.admin-toolbar label { flex: 1 1 260px; }
+.admin-toolbar button { min-height: 42px; }
+.admin-create-form, .assignment-form, .quota-project-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; padding: 16px; background: white; border: 1px solid #dce1e6; border-radius: 6px; }
+.admin-create-form label, .assignment-form label, .quota-project-form label { display: grid; gap: 6px; min-width: 0; }
+.checkbox-label { display: flex !important; flex-direction: row; align-items: center; align-self: center; }
+.checkbox-label input { width: auto; }
+.admin-table { overflow: auto; background: white; border: 1px solid #dce1e6; border-radius: 6px; }
+.admin-table-row { display: grid; grid-template-columns: minmax(170px, 1.4fr) minmax(160px, 1fr) minmax(180px, 1.2fr) minmax(190px, auto); align-items: center; min-width: 760px; border-bottom: 1px solid #edf0f2; }
+.admin-table-row:last-child { border-bottom: 0; }
+.admin-table-row > * { min-width: 0; padding: 12px 14px; overflow-wrap: anywhere; }
+.admin-table-header { color: #56616d; background: #f6f7f8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.admin-row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.admin-row-actions button, .danger-secondary { min-height: 34px; padding: 7px 10px; }
+.danger-secondary { color: #a01d2b; background: white; border: 1px solid #dba5ab; }
+.assignment-table .admin-table-row { grid-template-columns: minmax(130px, .8fr) minmax(210px, 1.2fr) minmax(210px, 1.2fr) minmax(110px, auto); }
+.quota-admin-table .admin-table-row { grid-template-columns: minmax(150px, 1fr) repeat(3, minmax(100px, .7fr)) minmax(170px, auto); }
+.admin-quota-service { display: grid; gap: 10px; }
+.admin-quota-service h2 { margin: 8px 0 0; font-size: 18px; }
+.admin-operation { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; background: #f4f7fa; border: 1px solid #dce1e6; border-radius: 5px; }
+.admin-detail { padding: 16px; background: white; border: 1px solid #dce1e6; border-radius: 6px; }
+.admin-detail .section-heading { display: flex; justify-content: space-between; align-items: center; }
+.admin-detail h2 { margin: 0; font-size: 18px; }
+.admin-detail dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 0; }
+.admin-detail dl div { min-width: 0; }
+.admin-detail dt { color: #66717d; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.admin-detail dd { margin: 5px 0 0; overflow-wrap: anywhere; }
 @media (max-width: 1240px) {
   .instance-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .instance-table-header { display: none; }
@@ -239,6 +270,9 @@ input[aria-invalid="true"] { border-color: #c72b3a; background: #fff7f8; }
   .instance-drawer > .error { margin-inline: 20px; }
   .drawer-tab-panel { padding-inline: 20px; }
   .drawer-request-reference { padding-inline: 20px; }
+  .admin-scope-select { grid-column: 1 / -1; grid-row: 3; width: 100%; margin: 0; }
+  .admin-scope-select select { flex: 1; min-width: 0; }
+  .admin-create-form, .assignment-form, .quota-project-form { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 420px) {
   .center, .auth-shell { padding: 14px; }

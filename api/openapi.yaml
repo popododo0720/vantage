@@ -25,6 +25,8 @@ tags:
     description: Bounded, project-scoped Nova inventory and instance details.
   - name: Provisioning Inputs
     description: Bounded, project-scoped inventories used to provision instances.
+  - name: Administration
+    description: Explicit-scope Identity, RBAC, project, and quota administration.
 paths:
   /session:
     get:
@@ -451,6 +453,196 @@ paths:
           $ref: "#/components/responses/GatewayTimeout"
         "422":
           $ref: "#/components/responses/InvalidRequest"
+  /admin/session:
+    get:
+      tags: [Administration]
+      summary: Discover policy-authorized administrator scopes
+      operationId: getAdminSession
+      responses:
+        "200": {description: Administrator scope capabilities, content: {application/json: {schema: {$ref: "#/components/schemas/AdminSession"}}}}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /admin/scope:
+    put:
+      tags: [Administration]
+      summary: Establish an explicit system, domain, or project administrator scope
+      operationId: setAdminScope
+      parameters: [{$ref: "#/components/parameters/CsrfToken"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminScopeRequest"}}}}
+      responses:
+        "200": {description: Active administrator scope, content: {application/json: {schema: {$ref: "#/components/schemas/AdminSession"}}}}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /admin/identity/{kind}:
+    parameters:
+      - {name: kind, in: path, required: true, schema: {type: string, enum: [projects, users, groups, roles]}}
+    get:
+      tags: [Administration]
+      summary: List a bounded Identity collection
+      operationId: listAdminIdentity
+      parameters:
+        - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/PageNumber"}
+        - {name: name, in: query, schema: {type: string, maxLength: 255}}
+        - {name: domain_id, in: query, schema: {type: string, maxLength: 255}}
+        - {name: enabled, in: query, schema: {type: boolean}}
+      responses:
+        "200": {description: Identity page, content: {application/json: {schema: {$ref: "#/components/schemas/AdminIdentityPage"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    post:
+      tags: [Administration]
+      summary: Create an Identity resource
+      operationId: createAdminIdentity
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {$ref: "#/components/parameters/ConfirmTarget"}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminIdentityCreate"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /admin/identity/{kind}/{resource_id}:
+    parameters:
+      - {name: kind, in: path, required: true, schema: {type: string, enum: [projects, users, groups, roles]}}
+      - {name: resource_id, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [Administration]
+      summary: Get one Identity resource
+      operationId: getAdminIdentity
+      responses:
+        "200": {description: Identity resource, content: {application/json: {schema: {$ref: "#/components/schemas/AdminIdentityResource"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+    patch:
+      tags: [Administration]
+      summary: Edit or disable an Identity resource
+      operationId: updateAdminIdentity
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {$ref: "#/components/parameters/ConfirmTarget"}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminIdentityUpdate"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    delete:
+      tags: [Administration]
+      summary: Delete an Identity resource after typed confirmation
+      operationId: deleteAdminIdentity
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminConfirmation"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+  /admin/projects/{project_id}/context:
+    get:
+      tags: [Administration]
+      summary: Select an administrator project context
+      operationId: getAdminProjectContext
+      parameters: [{name: project_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: Selected project, content: {application/json: {schema: {$ref: "#/components/schemas/AdminIdentityResource"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /admin/role-assignments:
+    get:
+      tags: [Administration]
+      summary: List role assignments with server-side filters
+      operationId: listAdminRoleAssignments
+      parameters:
+        - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/PageNumber"}
+      responses:
+        "200": {description: Assignment page, content: {application/json: {schema: {$ref: "#/components/schemas/AdminIdentityPage"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    post:
+      tags: [Administration]
+      summary: Grant a system, domain, or project role assignment
+      operationId: grantAdminRole
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {$ref: "#/components/parameters/ConfirmTarget"}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminRoleAssignmentCreate"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+  /admin/role-assignments/{assignment_id}:
+    delete:
+      tags: [Administration]
+      summary: Revoke a role assignment after typed confirmation
+      operationId: revokeAdminRole
+      parameters:
+        - {name: assignment_id, in: path, required: true, schema: {type: string}}
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminConfirmation"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+  /admin/projects/{project_id}/quotas:
+    get:
+      tags: [Administration]
+      summary: Read Nova, Neutron, and Cinder project quotas independently
+      operationId: getAdminProjectQuotas
+      parameters:
+        - {name: project_id, in: path, required: true, schema: {type: string}}
+        - {name: service, in: query, schema: {type: string, enum: [compute, network, storage]}}
+        - {name: user_id, in: query, description: Compute-only user quota target., schema: {type: string}}
+      responses:
+        "200": {description: Quotas and partial failures, content: {application/json: {schema: {$ref: "#/components/schemas/AdminQuotaCollection"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+  /admin/projects/{project_id}/quotas/{service}:
+    parameters:
+      - {name: project_id, in: path, required: true, schema: {type: string}}
+      - {name: service, in: path, required: true, schema: {type: string, enum: [compute, network, storage]}}
+    put:
+      tags: [Administration]
+      summary: Replace advertised quota overrides for one service
+      operationId: updateAdminProjectQuotas
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {$ref: "#/components/parameters/ConfirmTarget"}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminQuotaUpdate"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+    delete:
+      tags: [Administration]
+      summary: Delete quota overrides and restore provider defaults
+      operationId: resetAdminProjectQuotas
+      parameters:
+        - {$ref: "#/components/parameters/CsrfToken"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {name: user_id, in: query, schema: {type: string}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AdminConfirmation"}}}}
+      responses:
+        "202": {description: Tracked operation, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperationAck"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+  /admin/operations/{operation_id}:
+    get:
+      tags: [Administration]
+      summary: Get an administrator operation in the active scope
+      operationId: getAdminOperation
+      parameters: [{name: operation_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        "200": {description: Operation state with request IDs, content: {application/json: {schema: {$ref: "#/components/schemas/AdminOperation"}}}}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
 components:
   headers:
     CsrfToken:
@@ -501,6 +693,17 @@ components:
       schema:
         type: string
         format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 255}
+    ConfirmTarget:
+      name: X-Confirm-Target
+      in: header
+      required: true
+      description: Exact administrator resource name or ID typed by the operator.
+      schema: {type: string, minLength: 1, maxLength: 255}
   responses:
     Unauthenticated:
       description: The Vantage session is missing or expired.
@@ -557,6 +760,131 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
   schemas:
+    AdminScope:
+      type: object
+      additionalProperties: false
+      required: [type, id, name]
+      properties:
+        type: {type: string, enum: [system, domain, project]}
+        id: {type: string}
+        name: {type: string}
+    AdminSession:
+      type: object
+      additionalProperties: false
+      required: [available_scopes, active_scope]
+      properties:
+        available_scopes: {type: array, items: {$ref: "#/components/schemas/AdminScope"}}
+        active_scope:
+          anyOf: [{$ref: "#/components/schemas/AdminScope"}, {type: "null"}]
+    AdminScopeRequest:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type: {type: string, enum: [system, domain, project]}
+        id: {type: string, minLength: 1, maxLength: 255}
+    AdminIdentityResource:
+      type: object
+      additionalProperties: false
+      required: [id, name, extra]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        description: {type: [string, "null"]}
+        domain_id: {type: [string, "null"]}
+        enabled: {type: [boolean, "null"]}
+        default_project_id: {type: [string, "null"]}
+        email: {type: [string, "null"]}
+        parent_id: {type: [string, "null"]}
+        extra: {type: object, additionalProperties: true}
+    AdminIdentityPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {type: object, additionalProperties: true}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    AdminIdentityCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        description: {type: [string, "null"], maxLength: 1024}
+        domain_id: {type: [string, "null"], maxLength: 255}
+        enabled: {type: [boolean, "null"]}
+        default_project_id: {type: [string, "null"], maxLength: 255}
+        email: {type: [string, "null"], maxLength: 320}
+        password: {type: [string, "null"], minLength: 1, writeOnly: true}
+        parent_id: {type: [string, "null"], maxLength: 255}
+    AdminIdentityUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: {type: [string, "null"], maxLength: 255}
+        description: {type: [string, "null"], maxLength: 1024}
+        enabled: {type: [boolean, "null"]}
+        default_project_id: {type: [string, "null"], maxLength: 255}
+        email: {type: [string, "null"], maxLength: 320}
+        password: {type: [string, "null"], minLength: 1, writeOnly: true}
+    AdminConfirmation:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties: {confirm: {type: string, minLength: 1, maxLength: 255}}
+    AdminRoleAssignmentCreate:
+      type: object
+      additionalProperties: false
+      required: [role_id, actor_type, actor_id, scope_type, scope_id]
+      properties:
+        role_id: {type: string}
+        actor_type: {type: string, enum: [user, group]}
+        actor_id: {type: string}
+        scope_type: {type: string, enum: [system, domain, project]}
+        scope_id: {type: string}
+        inherited: {type: boolean, default: false}
+    AdminQuotaUpdate:
+      type: object
+      additionalProperties: false
+      required: [values]
+      properties:
+        values: {type: object, minProperties: 1, additionalProperties: {type: integer}}
+        user_id: {type: [string, "null"]}
+    AdminQuotaCollection:
+      type: object
+      additionalProperties: false
+      required: [project_id, generated_at, quotas, partial_errors]
+      properties:
+        project_id: {type: string}
+        generated_at: {type: string, format: date-time}
+        quotas: {type: array, items: {type: object, additionalProperties: true}}
+        partial_errors: {type: array, items: {$ref: "#/components/schemas/WidgetError"}}
+    AdminOperationAck:
+      type: object
+      additionalProperties: false
+      required: [operation_id, status, trace_id, replayed]
+      properties:
+        operation_id: {type: string, format: uuid}
+        status: {type: string, enum: [accepted, running, succeeded, failed, cancelled]}
+        trace_id: {type: string}
+        replayed: {type: boolean}
+    AdminOperation:
+      type: object
+      additionalProperties: true
+      required: [id, kind, status, submitted_at, updated_at, target_type, trace_id, openstack_request_ids]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string}
+        status: {type: string}
+        submitted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        target_type: {type: string}
+        target_id: {type: [string, "null"]}
+        target_name: {type: [string, "null"]}
+        trace_id: {type: string}
+        openstack_request_ids: {type: array, items: {type: string}}
+        problem: {type: [object, "null"], additionalProperties: true}
     LoginRequest:
       type: object
       additionalProperties: false
@@ -585,7 +913,7 @@ components:
     Session:
       type: object
       additionalProperties: false
-      required: [user, active_scope, expires_at, regions, locale]
+      required: [user, active_scope, expires_at, regions, locale, admin_available]
       properties:
         user:
           $ref: "#/components/schemas/User"
@@ -603,6 +931,9 @@ components:
         locale:
           type: string
           enum: [en, ko]
+        admin_available:
+          type: boolean
+          description: True only after the BFF successfully establishes a policy-authorized administrator scope.
     User:
       type: object
       additionalProperties: false

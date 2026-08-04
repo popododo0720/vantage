@@ -136,6 +136,7 @@ server session retains the Keystone membership snapshot used for scope checks.
 - [MVP mutation interaction specification](docs/MVP-INTERACTIONS.md)
 - [Resource screen and interaction contract](docs/RESOURCE-INTERACTIONS.md)
 - [CLI and API parity contract](docs/CLI-PARITY.md)
+- [Administrator identity, RBAC, and quotas](docs/ADMIN-IDENTITY-RBAC.md)
 - [MVP planning and design readiness](docs/MVP-READINESS.md)
 - [Penpot design completion audit](docs/DESIGN-QA.md)
 - [Goal 1.3 quota overview verification](docs/GOAL1-3-VERIFICATION.md)

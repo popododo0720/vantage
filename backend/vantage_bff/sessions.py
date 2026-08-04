@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from vantage_bff.admin.models import AdminScope
 from vantage_bff.models import Project, Scope, SessionResponse, User
 
 
@@ -20,6 +21,8 @@ class SessionRecord:
     expires_at: datetime
     auth_context: dict[str, Any]
     active_scope: Scope | None = None
+    admin_scopes: tuple[AdminScope, ...] = ()
+    active_admin_scope: AdminScope | None = None
     locale: str = "en"
 
     def public(self) -> SessionResponse:
@@ -29,6 +32,7 @@ class SessionRecord:
             expires_at=self.expires_at,
             regions=list(self.regions),
             locale=self.locale,
+            admin_available=bool(self.admin_scopes),
         )
 
 
@@ -70,7 +74,8 @@ class MemorySessionStore:
 
 def new_session(
     *, user: User, projects: tuple[Project, ...], regions: tuple[str, ...],
-    auth_context: dict[str, Any], ttl_seconds: int, upstream_expires_at: datetime | None = None
+    auth_context: dict[str, Any], ttl_seconds: int, upstream_expires_at: datetime | None = None,
+    admin_scopes: tuple[AdminScope, ...] = (),
 ) -> SessionRecord:
     local_expiry = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
     return SessionRecord(
@@ -82,6 +87,7 @@ def new_session(
         regions=regions,
         expires_at=min(local_expiry, upstream_expires_at) if upstream_expires_at else local_expiry,
         auth_context=auth_context,
+        admin_scopes=admin_scopes,
     )
 
 

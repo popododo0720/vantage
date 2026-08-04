@@ -43,6 +43,7 @@ class FakeConnection:
         self.identity = SimpleNamespace(
             user_projects=lambda _user_id: [project],
             get_project=lambda _project_id: project,
+            get_domain=lambda domain_id: SimpleNamespace(id=domain_id, name="Default"),
         )
         self.current_user_id = "user-alice"
 
@@ -104,7 +105,28 @@ def test_adapter_passes_authentication_connection_boundaries(
         "api_timeout": 15,
         "app_name": "vantage",
         "app_version": "0.3.0",
+    }, {
+        "auth_url": "https://keystone.example/v3",
+        "auth_type": "v3token",
+        "token": "sdk-token",
+        "region_name": "RegionOne",
+        "interface": "internal",
+        "api_timeout": 15.0,
+        "app_name": "vantage",
+        "app_version": "0.3.0",
+        "system_scope": "all",
+    }, {
+        "auth_url": "https://keystone.example/v3",
+        "auth_type": "v3token",
+        "token": "sdk-token",
+        "region_name": "RegionOne",
+        "interface": "internal",
+        "api_timeout": 15.0,
+        "app_name": "vantage",
+        "app_version": "0.3.0",
+        "domain_id": "default",
     }]
+    assert [scope.type.value for scope in result.admin_scopes] == ["system", "domain"]
 
 
 def test_adapter_passes_project_scope_connection_boundaries(

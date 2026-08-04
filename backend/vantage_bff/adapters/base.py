@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, cast
 
+from vantage_bff.admin.models import AdminScope
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -57,6 +58,7 @@ class AuthResult:
     projects: tuple[Project, ...]
     regions: tuple[str, ...]
     auth_context: dict[str, Any]
+    admin_scopes: tuple[AdminScope, ...] = ()
     expires_at: datetime | None = None
 
 

@@ -23,6 +23,7 @@ from vantage_bff.adapters.base import (
 )
 from vantage_bff.adapters.fake import FakeOpenStackAdapter
 from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
+from vantage_bff.admin.router import build_admin_router
 from vantage_bff.config import Settings
 from vantage_bff.cursors import CursorKey, MemoryCursorStore
 from vantage_bff.models import (
@@ -713,6 +714,7 @@ def create_app(
             auth_context=result.auth_context,
             ttl_seconds=active_settings.session_ttl_seconds,
             upstream_expires_at=result.expires_at,
+            admin_scopes=result.admin_scopes,
         )
         previous_session_id = request.cookies.get(active_settings.cookie_name)
         await request.app.state.sessions.create(record)
@@ -1298,6 +1300,14 @@ def create_app(
             response.headers["X-OpenStack-Request-ID"] = result.openstack_request_id
         return result
 
+    admin_router = build_admin_router(
+        current_session=current_session,
+        csrf_session=csrf_session,
+        error=ApiError,
+        set_session_cookie=set_session_cookie,
+    )
+    app.router.routes.extend(admin_router.routes)
+
     if (frontend_root / "index.html").is_file():
         app.mount(
             "/assets",
@@ -1314,6 +1324,8 @@ def create_app(
         @app.get("/instances/{instance_id}", include_in_schema=False)
         @app.get("/images", include_in_schema=False)
         @app.get("/keypairs", include_in_schema=False)
+        @app.get("/admin", include_in_schema=False)
+        @app.get("/admin/{path:path}", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")
 

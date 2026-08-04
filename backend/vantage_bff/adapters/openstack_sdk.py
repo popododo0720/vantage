@@ -17,6 +17,34 @@ from vantage_bff.adapters.base import (
     ScopeResult,
     normalized_quota,
 )
+from vantage_bff.admin.adapter import AdminScopeResult
+from vantage_bff.admin.models import (
+    AdminListResult,
+    AdminMutationResult,
+    AdminQuota,
+    AdminScope,
+    IdentityCreate,
+    IdentityKind,
+    IdentityResource,
+    IdentityUpdate,
+    QuotaUpdate,
+    RoleAssignmentCreate,
+)
+from vantage_bff.admin.openstack import (
+    assignment_from_id,
+    change_role,
+    connection_for,
+    create_resource,
+    delete_resource,
+    discover_scopes,
+    establish_scope,
+    get_resource,
+    list_resources,
+    read_quotas,
+    reset_quotas,
+    update_quotas,
+    update_resource,
+)
 from vantage_bff.models import (
     Flavor,
     Image,
@@ -159,12 +187,22 @@ class OpenStackSdkAdapter:
                     if endpoint.get("region_id") or endpoint.get("region")
                 }
             ) or [self.default_region]
+            admin_scopes, admin_tokens, admin_expiries = discover_scopes(
+                auth_url=self.auth_url,
+                token=token,
+                domain_id=access.user_domain_id,
+                region=regions[0],
+                interface=self.interface,
+                timeout=float(self.request_timeout_seconds),
+                app_version=_APP_VERSION,
+            )
             return AuthResult(
                 user=User(id=user_id, name=username, domain_id=access.user_domain_id),
                 projects=projects,
                 regions=tuple(regions),
-                auth_context={"unscoped_token": token},
-                expires_at=access.expires,
+                auth_context={"unscoped_token": token, "admin_tokens": admin_tokens},
+                expires_at=min([access.expires, *admin_expiries]),
+                admin_scopes=admin_scopes,
             )
         except Exception as exc:
             raise _authentication_failure(exc) from exc
@@ -324,6 +362,318 @@ class OpenStackSdkAdapter:
             limit=limit,
             marker=marker,
             name=name,
+        )
+
+    async def admin_scope(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        region: str,
+    ) -> AdminScopeResult:
+        return await self._sdk_threads.run(self._admin_scope, auth_context, scope, region)
+
+    async def admin_list(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind | str,
+        *,
+        limit: int,
+        cursor: str | None,
+        name: str | None,
+        filters: dict[str, str],
+    ) -> AdminListResult:
+        return await self._sdk_threads.run(
+            self._admin_list,
+            auth_context,
+            scope,
+            kind,
+            limit=limit,
+            cursor=cursor,
+            name=name,
+            filters=filters,
+        )
+
+    async def admin_get(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+    ) -> IdentityResource:
+        return await self._sdk_threads.run(
+            self._admin_get, auth_context, scope, kind, resource_id
+        )
+
+    async def admin_create(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        payload: IdentityCreate,
+    ) -> AdminMutationResult:
+        return await self._sdk_threads.run(
+            self._admin_create, auth_context, scope, kind, payload
+        )
+
+    async def admin_update(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+        payload: IdentityUpdate,
+    ) -> AdminMutationResult:
+        return await self._sdk_threads.run(
+            self._admin_update, auth_context, scope, kind, resource_id, payload
+        )
+
+    async def admin_delete(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+    ) -> AdminMutationResult:
+        return await self._sdk_threads.run(
+            self._admin_delete, auth_context, scope, kind, resource_id
+        )
+
+    async def admin_grant_role(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        payload: RoleAssignmentCreate,
+    ) -> AdminMutationResult:
+        return await self._sdk_threads.run(
+            self._admin_change_role, auth_context, scope, payload, False
+        )
+
+    async def admin_revoke_role(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        assignment_id: str,
+    ) -> AdminMutationResult:
+        payload = assignment_from_id(assignment_id)
+        return await self._sdk_threads.run(
+            self._admin_change_role, auth_context, scope, payload, True
+        )
+
+    async def admin_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        user_id: str | None,
+    ) -> tuple[AdminQuota, ...]:
+        return await self._sdk_threads.run(
+            self._admin_quotas, auth_context, scope, project_id, service, user_id
+        )
+
+    async def admin_update_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        payload: QuotaUpdate,
+    ) -> AdminMutationResult:
+        return await self._sdk_threads.run(
+            self._admin_update_quotas,
+            auth_context,
+            scope,
+            project_id,
+            service,
+            payload,
+        )
+
+    async def admin_reset_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        user_id: str | None,
+    ) -> AdminMutationResult:
+        return await self._sdk_threads.run(
+            self._admin_reset_quotas,
+            auth_context,
+            scope,
+            project_id,
+            service,
+            user_id,
+        )
+
+    def _admin_connection(
+        self, auth_context: dict[str, Any], scope: AdminScope, request_id: str
+    ) -> Any:
+        return connection_for(
+            auth_url=self.auth_url,
+            interface=self.interface,
+            timeout=self.request_timeout_seconds,
+            app_version=_APP_VERSION,
+            auth_context=auth_context,
+            scope=scope,
+            global_request_id=request_id,
+        )
+
+    def _admin_scope(
+        self, auth_context: dict[str, Any], scope: AdminScope, region: str
+    ) -> AdminScopeResult:
+        return establish_scope(
+            auth_url=self.auth_url,
+            interface=self.interface,
+            timeout=self.request_timeout_seconds,
+            app_version=_APP_VERSION,
+            auth_context=auth_context,
+            scope=scope,
+            region=region,
+        )
+
+    def _admin_list(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind | str,
+        *,
+        limit: int,
+        cursor: str | None,
+        name: str | None,
+        filters: dict[str, str],
+    ) -> AdminListResult:
+        request_id = _global_request_id()
+        connection = self._admin_connection(auth_context, scope, request_id)
+        return list_resources(
+            connection,
+            kind,
+            limit=limit,
+            cursor=cursor,
+            name=name,
+            filters=filters,
+            request_id=request_id,
+        )
+
+    def _admin_get(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+    ) -> IdentityResource:
+        return get_resource(
+            self._admin_connection(auth_context, scope, _global_request_id()),
+            kind,
+            resource_id,
+        )
+
+    def _admin_create(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        payload: IdentityCreate,
+    ) -> AdminMutationResult:
+        request_id = _global_request_id()
+        return create_resource(
+            self._admin_connection(auth_context, scope, request_id), kind, payload, request_id
+        )
+
+    def _admin_update(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+        payload: IdentityUpdate,
+    ) -> AdminMutationResult:
+        request_id = _global_request_id()
+        return update_resource(
+            self._admin_connection(auth_context, scope, request_id),
+            kind,
+            resource_id,
+            payload,
+            request_id,
+        )
+
+    def _admin_delete(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+    ) -> AdminMutationResult:
+        request_id = _global_request_id()
+        return delete_resource(
+            self._admin_connection(auth_context, scope, request_id),
+            kind,
+            resource_id,
+            request_id,
+        )
+
+    def _admin_change_role(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        payload: RoleAssignmentCreate,
+        revoke: bool,
+    ) -> AdminMutationResult:
+        request_id = _global_request_id()
+        return change_role(
+            self._admin_connection(auth_context, scope, request_id),
+            payload,
+            revoke=revoke,
+            request_id=request_id,
+        )
+
+    def _admin_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        user_id: str | None,
+    ) -> tuple[AdminQuota, ...]:
+        return read_quotas(
+            self._admin_connection(auth_context, scope, _global_request_id()),
+            project_id,
+            service,
+            user_id,
+        )
+
+    def _admin_update_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        payload: QuotaUpdate,
+    ) -> AdminMutationResult:
+        request_id = _global_request_id()
+        return update_quotas(
+            self._admin_connection(auth_context, scope, request_id),
+            project_id,
+            service,
+            payload,
+            request_id,
+        )
+
+    def _admin_reset_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        user_id: str | None,
+    ) -> AdminMutationResult:
+        request_id = _global_request_id()
+        return reset_quotas(
+            self._admin_connection(auth_context, scope, request_id),
+            project_id,
+            service,
+            user_id,
+            request_id,
         )
 
     def _scope(self, auth_context: dict[str, Any], project_id: str, region: str) -> ScopeResult:

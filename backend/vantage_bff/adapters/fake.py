@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,21 @@ from vantage_bff.adapters.base import (
     ScopeError,
     ScopeResult,
     normalized_quota,
+)
+from vantage_bff.admin.adapter import AdminScopeResult
+from vantage_bff.admin.models import (
+    AdminListResult,
+    AdminMutationResult,
+    AdminQuota,
+    AdminScope,
+    AdminScopeType,
+    IdentityCreate,
+    IdentityKind,
+    IdentityResource,
+    IdentityUpdate,
+    QuotaUpdate,
+    RoleAssignment,
+    RoleAssignmentCreate,
 )
 from vantage_bff.models import (
     Flavor,
@@ -48,10 +64,65 @@ class FakeOpenStackAdapter:
         Project(id="project-beta", name="Beta", domain_id="default", enabled=True),
     )
 
+    def __init__(self) -> None:
+        self._admin_lock = asyncio.Lock()
+        projects = [
+            IdentityResource(
+                id=project.id,
+                name=project.name,
+                domain_id=project.domain_id,
+                enabled=project.enabled,
+                description=f"Fake project {project.name}",
+            )
+            for project in self._projects
+        ]
+        projects.extend(
+            IdentityResource(
+                id=f"project-{index:02d}",
+                name=f"Project {index:02d}",
+                domain_id="default",
+                enabled=index % 7 != 0,
+            )
+            for index in range(3, 34)
+        )
+        self._admin_resources: dict[str, dict[str, IdentityResource]] = {
+            "projects": {item.id: item for item in projects},
+            "users": {
+                f"user-{index:02d}": IdentityResource(
+                    id=f"user-{index:02d}",
+                    name=f"user{index:02d}",
+                    domain_id="default",
+                    enabled=True,
+                    email=f"user{index:02d}@example.invalid",
+                )
+                for index in range(1, 34)
+            },
+            "groups": {
+                f"group-{index:02d}": IdentityResource(
+                    id=f"group-{index:02d}",
+                    name=f"group{index:02d}",
+                    domain_id="default",
+                    description=f"Fake group {index:02d}",
+                )
+                for index in range(1, 14)
+            },
+            "roles": {
+                role: IdentityResource(id=f"role-{role}", name=role)
+                for role in ("admin", "member", "reader")
+            },
+        }
+        self._assignments: dict[str, RoleAssignment] = {}
+        self._quota_overrides: dict[tuple[str, QuotaService, str | None], dict[str, int]] = {}
+
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         if password != "vantage":
             raise AuthenticationError
         visible = self._projects if username != "limited" else self._projects[:1]
+        admin_scopes = (
+            AdminScope(type=AdminScopeType.SYSTEM, id="all", name="System"),
+            AdminScope(type=AdminScopeType.DOMAIN, id=domain, name=domain),
+            AdminScope(type=AdminScopeType.PROJECT, id="project-alpha", name="Alpha"),
+        ) if username == "alice" else ()
         return AuthResult(
             user=User(id=f"user-{username}", name=username, domain_id=domain),
             projects=visible,
@@ -59,9 +130,255 @@ class FakeOpenStackAdapter:
             auth_context={
                 "unscoped_token": secrets.token_urlsafe(32),
                 "catalog": {"identity": "fake://keystone"},
+                "admin_tokens": {
+                    f"{scope.type.value}:{scope.id}": secrets.token_urlsafe(32)
+                    for scope in admin_scopes
+                },
             },
+            admin_scopes=admin_scopes,
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
+
+    def _require_admin_scope(self, auth_context: dict[str, Any], scope: AdminScope) -> None:
+        tokens = auth_context.get("admin_tokens")
+        if not isinstance(tokens, dict) or f"{scope.type.value}:{scope.id}" not in tokens:
+            raise AdapterError(status_code=403, request_id=self._request_id())
+
+    async def admin_scope(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        region: str,
+    ) -> AdminScopeResult:
+        del region
+        tokens = auth_context.get("admin_tokens")
+        if not isinstance(tokens, dict):
+            raise AdapterError(status_code=403, request_id=self._request_id())
+        key = f"{scope.type.value}:{scope.id}"
+        if key not in tokens:
+            if scope.type is not AdminScopeType.PROJECT:
+                raise AdapterError(status_code=403, request_id=self._request_id())
+            tokens = {**tokens, key: secrets.token_urlsafe(32)}
+        if scope.type is AdminScopeType.SYSTEM:
+            scope = scope.model_copy(update={"name": "System"})
+        elif scope.type is AdminScopeType.PROJECT:
+            project = self._admin_resources["projects"].get(scope.id)
+            if project is None:
+                raise AdapterError(status_code=404, request_id=self._request_id())
+            scope = scope.model_copy(update={"name": project.name})
+        return AdminScopeResult(
+            scope=scope,
+            auth_context={**auth_context, "admin_tokens": tokens, "active_admin_scope": key},
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+    async def admin_list(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind | str,
+        *,
+        limit: int,
+        cursor: str | None,
+        name: str | None,
+        filters: dict[str, str],
+    ) -> AdminListResult:
+        self._require_admin_scope(auth_context, scope)
+        if kind == "role-assignments":
+            values: list[IdentityResource | RoleAssignment] = list(self._assignments.values())
+            for key, value in filters.items():
+                if key in {"user_id", "group_id"}:
+                    actor_type = key.removesuffix("_id")
+                    values = [
+                        item for item in values
+                        if getattr(item, "actor_type", None) == actor_type
+                        and getattr(item, "actor_id", None) == value
+                    ]
+                elif key in {"project_id", "domain_id"}:
+                    scope_type = key.removesuffix("_id")
+                    values = [
+                        item for item in values
+                        if getattr(item, "scope_type", None) == scope_type
+                        and getattr(item, "scope_id", None) == value
+                    ]
+                else:
+                    values = [item for item in values if getattr(item, key, None) == value]
+        else:
+            values = list(self._admin_resources[str(kind)].values())
+            if name:
+                values = [
+                    item
+                    for item in values
+                    if name.casefold() in getattr(item, "name", "").casefold()
+                ]
+            for key, value in filters.items():
+                values = [
+                    item for item in values
+                    if str(getattr(item, key, "")).lower() == value.lower()
+                ]
+        values.sort(key=lambda item: (getattr(item, "name", ""), item.id))
+        start = int(cursor or "0")
+        visible = values[start:start + limit]
+        next_cursor = str(start + limit) if start + limit < len(values) else None
+        return AdminListResult(
+            items=visible,
+            next_cursor=next_cursor,
+            openstack_request_id=self._request_id(),
+        )
+
+    async def admin_get(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+    ) -> IdentityResource:
+        self._require_admin_scope(auth_context, scope)
+        resource = self._admin_resources[kind].get(resource_id)
+        if resource is None:
+            raise AdapterError(status_code=404, request_id=self._request_id())
+        return resource
+
+    async def admin_create(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        payload: IdentityCreate,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        async with self._admin_lock:
+            collection = self._admin_resources[kind]
+            if any(item.name == payload.name for item in collection.values()):
+                raise AdapterError(status_code=409, request_id=self._request_id())
+            resource_id = str(uuid5(_FAKE_NAMESPACE, f"admin:{kind}:{payload.name}"))
+            resource = IdentityResource(
+                id=resource_id,
+                **payload.model_dump(exclude={"password"}),
+            )
+            collection[resource_id] = resource
+        return AdminMutationResult(resource=resource, openstack_request_ids=[self._request_id()])
+
+    async def admin_update(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+        payload: IdentityUpdate,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        async with self._admin_lock:
+            current = self._admin_resources[kind].get(resource_id)
+            if current is None:
+                raise AdapterError(status_code=404, request_id=self._request_id())
+            values = payload.model_dump(exclude_unset=True, exclude={"password"})
+            resource = current.model_copy(update=values)
+            self._admin_resources[kind][resource_id] = resource
+        return AdminMutationResult(resource=resource, openstack_request_ids=[self._request_id()])
+
+    async def admin_delete(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        kind: IdentityKind,
+        resource_id: str,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        async with self._admin_lock:
+            if self._admin_resources[kind].pop(resource_id, None) is None:
+                raise AdapterError(status_code=404, request_id=self._request_id())
+        return AdminMutationResult(openstack_request_ids=[self._request_id()])
+
+    async def admin_grant_role(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        payload: RoleAssignmentCreate,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        assignment_id = ":".join(
+            (payload.role_id, payload.actor_type, payload.actor_id,
+             payload.scope_type.value, payload.scope_id, str(payload.inherited).lower())
+        )
+        assignment = RoleAssignment(id=assignment_id, **payload.model_dump())
+        async with self._admin_lock:
+            if assignment_id in self._assignments:
+                raise AdapterError(status_code=409, request_id=self._request_id())
+            self._assignments[assignment_id] = assignment
+        return AdminMutationResult(resource=assignment, openstack_request_ids=[self._request_id()])
+
+    async def admin_revoke_role(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        assignment_id: str,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        async with self._admin_lock:
+            if self._assignments.pop(assignment_id, None) is None:
+                raise AdapterError(status_code=404, request_id=self._request_id())
+        return AdminMutationResult(openstack_request_ids=[self._request_id()])
+
+    async def admin_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        user_id: str | None,
+    ) -> tuple[AdminQuota, ...]:
+        self._require_admin_scope(auth_context, scope)
+        if user_id is not None and service is not QuotaService.COMPUTE:
+            raise AdapterError(status_code=422, request_id=self._request_id())
+        defaults = {
+            QuotaService.COMPUTE: {"instances": 80, "cores": 40, "ram": 98304},
+            QuotaService.NETWORK: {"floatingip": 10, "network": 100, "port": 500},
+            QuotaService.STORAGE: {"volumes": 20, "gigabytes": 1000, "snapshots": 20},
+        }[service]
+        values = {**defaults, **self._quota_overrides.get((project_id, service, user_id), {})}
+        return tuple(
+            AdminQuota(
+                service=service,
+                resource=name,
+                limit=value,
+                used=0,
+                reserved=0,
+                default=defaults.get(name),
+                user_id=user_id,
+            )
+            for name, value in values.items()
+        )
+
+    async def admin_update_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        payload: QuotaUpdate,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        if payload.user_id is not None and service is not QuotaService.COMPUTE:
+            raise AdapterError(status_code=422, request_id=self._request_id())
+        async with self._admin_lock:
+            self._quota_overrides[(project_id, service, payload.user_id)] = dict(payload.values)
+        return AdminMutationResult(openstack_request_ids=[self._request_id()])
+
+    async def admin_reset_quotas(
+        self,
+        auth_context: dict[str, Any],
+        scope: AdminScope,
+        project_id: str,
+        service: QuotaService,
+        user_id: str | None,
+    ) -> AdminMutationResult:
+        self._require_admin_scope(auth_context, scope)
+        if user_id is not None and service is not QuotaService.COMPUTE:
+            raise AdapterError(status_code=422, request_id=self._request_id())
+        async with self._admin_lock:
+            self._quota_overrides.pop((project_id, service, user_id), None)
+        return AdminMutationResult(openstack_request_ids=[self._request_id()])
 
     async def scope(
         self, auth_context: dict[str, Any], project_id: str, region: str

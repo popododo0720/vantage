@@ -396,6 +396,30 @@ describe('session and scope flow', () => {
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled()
   })
 
+  it('shows the administrator workspace only for a server-authorized session', async () => {
+    const adminScope = { type: 'system', id: 'all', name: 'System' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ ...scopedSession, admin_available: true }))
+      .mockResolvedValueOnce(json(overviewPayload))
+      .mockResolvedValueOnce(json({
+        available_scopes: [adminScope],
+        active_scope: adminScope,
+      }))
+      .mockResolvedValueOnce(json({
+        items: [{ id: 'project-alpha', name: 'Alpha', domain_id: 'default', enabled: true }],
+        page: projectPage.page,
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    const adminLink = await screen.findByRole('link', { name: 'Administrator workspace' })
+    fireEvent.click(adminLink)
+
+    expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/admin/projects')
+    expect(screen.getByLabelText('Administrator scope')).toHaveValue('system:all')
+  })
+
   it('keeps the project selector open while changing language', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json(scopedSession, {

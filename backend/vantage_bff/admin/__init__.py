@@ -1,0 +1,1 @@
+"""Administrator workspace domain package."""

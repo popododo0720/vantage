@@ -1,4 +1,11 @@
 import type {
+  AdminOperation,
+  AdminQuotaCollection,
+  AdminScopeType,
+  AdminSession,
+  IdentityKind,
+  IdentityPage,
+  IdentityResource,
   InstanceDetail,
   InstancePage,
   InstanceQuery,
@@ -6,11 +13,13 @@ import type {
   ImageQuery,
   InventoryQuery,
   KeyPairPage,
+  OperationAck,
   Problem,
   ProjectOverview,
   ProjectPage,
   QuotaPayload,
   QuotaService,
+  RoleAssignmentPage,
   Session,
 } from './types'
 
@@ -135,6 +144,107 @@ export const api = {
   },
   instance: (instanceId: string, signal?: AbortSignal) =>
     request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),
+  adminSession: (signal?: AbortSignal) => request<AdminSession>('/admin/session', { signal }),
+  adminScope: (type: AdminScopeType, id: string) => request<AdminSession>('/admin/scope', {
+    method: 'PUT',
+    body: JSON.stringify({ type, id }),
+  }),
+  adminIdentity: (
+    kind: IdentityKind,
+    name: string,
+    page: number,
+    limit: number,
+    signal?: AbortSignal,
+  ) => {
+    const query = new URLSearchParams({ page: String(page), limit: String(limit) })
+    if (name) query.set('name', name)
+    return request<IdentityPage>(`/admin/identity/${kind}?${query}`, { signal })
+  },
+  adminIdentityDetail: (kind: IdentityKind, id: string) =>
+    request<IdentityResource>(`/admin/identity/${kind}/${encodeURIComponent(id)}`),
+  createAdminIdentity: (kind: IdentityKind, payload: Record<string, unknown>, confirm: string) =>
+    request<OperationAck>(`/admin/identity/${kind}`, {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': crypto.randomUUID(),
+        'X-Confirm-Target': confirm,
+      },
+      body: JSON.stringify(payload),
+    }),
+  updateAdminIdentity: (
+    kind: IdentityKind,
+    id: string,
+    payload: Record<string, unknown>,
+  ) => request<OperationAck>(`/admin/identity/${kind}/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Idempotency-Key': crypto.randomUUID(), 'X-Confirm-Target': id },
+    body: JSON.stringify(payload),
+  }),
+  deleteAdminIdentity: (kind: IdentityKind, id: string, confirm: string) =>
+    request<OperationAck>(`/admin/identity/${kind}/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ confirm }),
+    }),
+  adminAssignments: (page: number, limit: number, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ page: String(page), limit: String(limit) })
+    return request<RoleAssignmentPage>(`/admin/role-assignments?${query}`, { signal })
+  },
+  grantAdminRole: (payload: Record<string, unknown>, actorId: string) =>
+    request<OperationAck>('/admin/role-assignments', {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': crypto.randomUUID(),
+        'X-Confirm-Target': actorId,
+      },
+      body: JSON.stringify(payload),
+    }),
+  revokeAdminRole: (id: string) => request<OperationAck>(
+    `/admin/role-assignments/${encodeURIComponent(id)}`,
+    {
+      method: 'DELETE',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ confirm: id }),
+    },
+  ),
+  adminQuotas: (projectId: string, userId = '', signal?: AbortSignal) => {
+    const query = new URLSearchParams()
+    if (userId) query.set('user_id', userId)
+    const suffix = query.size ? `?${query}` : ''
+    return request<AdminQuotaCollection>(
+      `/admin/projects/${encodeURIComponent(projectId)}/quotas${suffix}`,
+      { signal },
+    )
+  },
+  updateAdminQuotas: (
+    projectId: string,
+    service: QuotaService,
+    values: Record<string, number>,
+    userId = '',
+  ) => request<OperationAck>(
+    `/admin/projects/${encodeURIComponent(projectId)}/quotas/${service}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Idempotency-Key': crypto.randomUUID(),
+        'X-Confirm-Target': projectId,
+      },
+      body: JSON.stringify({ values, user_id: userId || null }),
+    },
+  ),
+  resetAdminQuotas: (projectId: string, service: QuotaService, userId = '') => {
+    const query = userId ? `?${new URLSearchParams({ user_id: userId })}` : ''
+    return request<OperationAck>(
+      `/admin/projects/${encodeURIComponent(projectId)}/quotas/${service}${query}`,
+      {
+        method: 'DELETE',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ confirm: projectId }),
+      },
+    )
+  },
+  adminOperation: (id: string, signal?: AbortSignal) =>
+    request<AdminOperation>(`/admin/operations/${encodeURIComponent(id)}`, { signal }),
   logout: async () => {
     await request<void>('/session', { method: 'DELETE' })
     csrfToken = ''

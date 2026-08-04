@@ -16,6 +16,7 @@ export interface Session {
   expires_at: string
   regions: string[]
   locale: 'en' | 'ko'
+  admin_available?: boolean
 }
 
 export interface Problem {
@@ -162,4 +163,89 @@ export interface InstanceSummary {
 
 export interface ProjectOverview extends QuotaPayload {
   instance_summary: InstanceSummary | null
+}
+
+export type AdminScopeType = 'system' | 'domain' | 'project'
+
+export interface AdminScope {
+  type: AdminScopeType
+  id: string
+  name: string
+}
+
+export interface AdminSession {
+  available_scopes: AdminScope[]
+  active_scope: AdminScope | null
+}
+
+export type IdentityKind = 'projects' | 'users' | 'groups' | 'roles'
+
+export interface IdentityResource {
+  id: string
+  name: string
+  description: string | null
+  domain_id: string | null
+  enabled: boolean | null
+  default_project_id: string | null
+  email: string | null
+  parent_id: string | null
+  extra: Record<string, unknown>
+}
+
+export interface IdentityPage {
+  items: IdentityResource[]
+  page: PageInfo
+}
+
+export interface RoleAssignment {
+  id: string
+  role_id: string
+  actor_type: 'user' | 'group'
+  actor_id: string
+  scope_type: AdminScopeType
+  scope_id: string
+  inherited: boolean
+}
+
+export interface RoleAssignmentPage {
+  items: RoleAssignment[]
+  page: PageInfo
+}
+
+export interface AdminQuota {
+  service: QuotaService
+  resource: string
+  limit: number | null
+  used: number | null
+  reserved: number | null
+  default: number | null
+  user_id: string | null
+}
+
+export interface AdminQuotaCollection {
+  project_id: string
+  generated_at: string
+  quotas: AdminQuota[]
+  partial_errors: WidgetError[]
+}
+
+export interface OperationAck {
+  operation_id: string
+  status: string
+  trace_id: string
+  replayed: boolean
+}
+
+export interface AdminOperation {
+  id: string
+  kind: string
+  status: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  submitted_at: string
+  updated_at: string
+  target_type: string
+  target_id: string | null
+  target_name: string | null
+  trace_id: string
+  openstack_request_ids: string[]
+  problem: { status: number; code: string; detail: string; openstack_request_id?: string } | null
 }
