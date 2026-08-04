@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, ParamSpec, TypeVar, cast
@@ -89,6 +92,11 @@ class _BoundedToThreadRunner:
         if not task.cancelled():
             task.exception()
 
+    async def close(self) -> None:
+        running = tuple(self._running)
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+
 
 class OpenStackSdkAdapter:
     """OpenStack boundary; endpoint discovery and token scoping stay in openstacksdk."""
@@ -103,6 +111,7 @@ class OpenStackSdkAdapter:
         instance_timeout_seconds: float | None = None,
         provisioning_timeout_seconds: float | None = None,
         thread_capacity: int = 8,
+        connection_cache_size: int = 256,
     ) -> None:
         self.auth_url = auth_url
         self.interface = interface
@@ -110,10 +119,38 @@ class OpenStackSdkAdapter:
         self.request_timeout_seconds = request_timeout_seconds
         self.quota_timeout_seconds = quota_timeout_seconds or float(request_timeout_seconds)
         self.instance_timeout_seconds = instance_timeout_seconds or float(request_timeout_seconds)
-        self.provisioning_timeout_seconds = (
-            provisioning_timeout_seconds or float(request_timeout_seconds)
+        self.provisioning_timeout_seconds = provisioning_timeout_seconds or float(
+            request_timeout_seconds
         )
         self._sdk_threads = _BoundedToThreadRunner(thread_capacity)
+        if connection_cache_size <= 0:
+            raise ValueError("Connection cache size must be positive")
+        self._connection_cache_size = connection_cache_size
+        self._connections: OrderedDict[tuple[str, str, str, float, int], Any] = OrderedDict()
+        self._connections_lock = threading.Lock()
+
+    async def close(self) -> None:
+        await self._sdk_threads.close()
+        with self._connections_lock:
+            connections = tuple(self._connections.values())
+            self._connections.clear()
+        for connection in connections:
+            close = getattr(connection, "close", None)
+            if close is not None:
+                close()
+
+    async def close_auth_context(self, auth_context: dict[str, Any]) -> None:
+        token = auth_context.get("scoped_token")
+        if not isinstance(token, str) or not token:
+            return
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        with self._connections_lock:
+            matching = [key for key in self._connections if key[0] == digest]
+            connections = [self._connections.pop(key) for key in matching]
+        for connection in connections:
+            close = getattr(connection, "close", None)
+            if close is not None:
+                close()
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         return await self._sdk_threads.run(self._authenticate, username, password, domain)
@@ -703,18 +740,41 @@ class OpenStackSdkAdapter:
             or auth_context.get("region") != region
         ):
             raise AdapterError(status_code=401)
-        return Connection(
-            auth_url=self.auth_url,
-            auth_type="v3token",
-            token=token,
-            project_id=project_id,
-            region_name=region,
-            interface=self.interface,
-            api_timeout=request_timeout_seconds or self.instance_timeout_seconds,
-            app_name="vantage",
-            app_version=_APP_VERSION,
-            global_request_id=correlation_id,
+        timeout = request_timeout_seconds or self.instance_timeout_seconds
+        cache_key = (
+            hashlib.sha256(token.encode()).hexdigest(),
+            project_id,
+            region,
+            timeout,
+            threading.get_ident(),
         )
+        with self._connections_lock:
+            existing = self._connections.get(cache_key)
+            if existing is not None:
+                self._connections.move_to_end(cache_key)
+                session = getattr(existing, "session", None)
+                if session is not None:
+                    session.global_request_id = correlation_id
+                return existing
+            connection = Connection(
+                auth_url=self.auth_url,
+                auth_type="v3token",
+                token=token,
+                project_id=project_id,
+                region_name=region,
+                interface=self.interface,
+                api_timeout=timeout,
+                app_name="vantage",
+                app_version=_APP_VERSION,
+                global_request_id=correlation_id,
+            )
+            self._connections[cache_key] = connection
+            if len(self._connections) > self._connection_cache_size:
+                _, evicted = self._connections.popitem(last=False)
+                close = getattr(evicted, "close", None)
+                if close is not None:
+                    close()
+            return connection
 
 
 def _has_next_server_link(response: Any, data: Mapping[str, Any]) -> bool:

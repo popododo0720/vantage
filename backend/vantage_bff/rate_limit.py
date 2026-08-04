@@ -5,6 +5,13 @@ import secrets
 from collections import defaultdict, deque
 from collections.abc import Callable
 from time import monotonic
+from typing import Protocol
+
+
+class LoginLimiter(Protocol):
+    async def reserve(self, key: str) -> str | None: ...
+    async def release(self, key: str, reservation: str) -> None: ...
+    async def succeeded(self, key: str) -> None: ...
 
 
 class LoginRateLimiter:

@@ -88,6 +88,12 @@ token. Credentials exist only for the Keystone authentication exchange.
   visible.
 - Removes the session and related caches on logout or terminal expiry.
 - Never persists passwords, generated private keys, or noVNC URLs.
+- Uses a pluggable store contract. Development/fake mode can use bounded
+  process memory; production requires Redis-backed JSON session, cursor,
+  operation/idempotency, quota-cache, and login-rate-limit state so multiple
+  BFF workers share security decisions and expiry.
+- Redis values use schema-validated JSON and explicit TTLs; Python pickle and
+  executable/native object serialization are forbidden.
 
 ### OpenStack Adapters
 
@@ -103,6 +109,10 @@ token. Credentials exist only for the Keystone authentication exchange.
   the browser-facing request does not release capacity until the underlying
   SDK thread finishes, preventing stalled upstream calls from accumulating.
 - Keep Neutron and Cinder backend details out of browser-facing schemas.
+- Reuse per-thread, per-token-scope SDK connections within a bounded LRU so
+  HTTP pools are reused without concurrently changing a connection's global
+  request ID. Logout, scope replacement, eviction, and graceful shutdown close
+  retained connections.
 
 ### Operation Coordinator
 
@@ -163,6 +173,19 @@ flag silently added to an ordinary delete.
 - Cold and warm route measurements are separated.
 - The release targets and fault-injection matrix are defined in
   [Performance contract](PERFORMANCE.md).
+- Cache/coalescing keys include user, project, region, policy-scope namespace,
+  service, resource, and query behavior. Only successful bounded shaped JSON is
+  reusable; cache errors never trigger an unsafe production memory fallback.
+
+## Process and Deployment Model
+
+The BFF is stateless apart from configured platform stores. Multiple workers or
+replicas may run behind any HTTP load balancer without session affinity when
+Redis is configured. Liveness is process-local; readiness checks Redis but not
+every OpenStack service. SIGTERM stops admission at the server layer, waits for
+bounded SDK work up to the configured grace period, closes SDK connections and
+Redis, then exits. Deployment configuration does not name Ceph, OVN, Kolla, a
+node count, or a converged topology.
 
 ## Project and Administrator Separation
 

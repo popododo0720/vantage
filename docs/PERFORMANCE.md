@@ -5,14 +5,26 @@ use. Visual improvement without measurable latency improvement is not enough.
 
 ## MVP SLOs
 
-| Signal | Target | Measurement |
-| --- | ---: | --- |
-| First useful project view | p75 <= 1.5 s | Browser RUM, reference-cloud matrix |
-| Cached route transition | p95 <= 300 ms | Browser RUM |
-| Project overview BFF | p95 <= 800 ms | BFF metrics |
-| Normal list BFF | p95 <= 600 ms | BFF metrics |
-| Mutation acknowledgement | <= 300 ms | Browser and BFF |
-| Partial service failure | 0 full-page blocks | Fault injection |
+The targets below are release gates, not averages. Browser timings include the
+network profile in the reference matrix; BFF timings are measured at the HTTP
+boundary and exclude browser rendering.
+
+| Signal | Target | BFF/upstream budget | Measurement |
+| --- | ---: | --- | --- |
+| Login | p95 <= 2.5 s | Keystone 2.0 s, BFF 100 ms | Browser RUM and BFF metrics |
+| Project/region scope switch | p95 <= 1.2 s | Keystone 1.0 s, BFF 100 ms | Browser RUM and BFF metrics |
+| First useful project view | p75 <= 1.5 s | shell independent; overview p95 <= 800 ms | Browser RUM, reference-cloud matrix |
+| Project overview/dashboard BFF | p95 <= 800 ms | widgets 3.0 s independently, whole response 4.0 s | BFF and upstream metrics |
+| First filtered list page | p95 <= 600 ms | service 3.0 s, exactly one bounded request | BFF and upstream metrics |
+| Subsequent cursor page | p95 <= 450 ms | cursor lookup 25 ms, service 3.0 s | BFF and upstream metrics |
+| Cached route/reference transition | p95 <= 300 ms | cache lookup 25 ms | Browser RUM |
+| Mutation acknowledgement | p95 <= 300 ms | durable operation/idempotency write 100 ms | Browser and BFF |
+| noVNC bootstrap | p95 <= 2.0 s | Nova console request 1.5 s, BFF 100 ms | Browser and BFF; URL never cached |
+| Partial service failure | 0 full-page blocks | independent timeout/error result | Fault injection |
+
+Login, scope switch, mutation acknowledgement, and noVNC are forward-looking
+budgets until their complete runtime slices exist. A route is not declared
+compliant merely because the common platform can measure it.
 
 ## Request Strategy
 
@@ -102,6 +114,18 @@ Never cache:
 - private keys
 - mutation responses as reusable state
 
+The implemented quota-widget cache defaults to 10 seconds and coalesces
+identical misses in each BFF worker. Redis shares the successful bounded value
+between workers. Keys hash, but logically include, user, project, region,
+policy-scope namespace, service, resource, and query behavior. Errors and
+timeouts are not cached. Scope switch, logout, and terminal authentication
+failure invalidate the old policy-scope index.
+
+Catalog and immutable/reference caches must use the same key builder and an
+explicit resource-specific TTL when those adapters are introduced. A cache may
+store only shaped JSON, never an SDK object, token-bearing connection, response
+header collection, credential, console URL, or private key.
+
 ## Observability
 
 Track:
@@ -113,6 +137,52 @@ Track:
 - `403`, `409`, `429`, and `5xx` rates
 - Vantage trace ID to OpenStack request ID correlation
 - operation acknowledgement to final-resource-state duration
+
+The BFF exports Prometheus text at `/metrics` using OpenTelemetry-compatible
+metric names and bounded labels. `/health/live` proves that the process event
+loop is serving; `/health/ready` checks the configured shared platform store.
+Readiness does not issue synthetic OpenStack API calls or make a transient
+Nova/Neutron failure restart every BFF worker. JSON request logs contain route,
+status, latency, Vantage trace ID, and response request ID, but exclude payloads,
+cookies, authorization, CSRF values, passwords, tokens, console URLs, and
+private keys.
+
+## CI Performance Regression Workload
+
+`backend/tests/test_performance_platform.py` runs without OpenStack and gates:
+
+- parallel overview fan-out (the three quota adapters must be admitted together);
+- 20 concurrent cold overview requests coalescing to one call per service;
+- cache isolation and invalidation by policy-scope namespace;
+- liveness, readiness, Prometheus exposition, and log redaction;
+- production configuration rejecting process-local stores.
+
+The instance/provisioning regression suites additionally assert one upstream
+request per browser page, `limit + 1` look-ahead, progressive cursor behavior,
+and no manufactured total/full collection fetch. CI timings prove algorithmic
+behavior, not reference-cloud SLO compliance.
+
+## OpenStack 2026.1 Validation Procedure
+
+1. Deploy at least two BFF workers with Redis and the OpenStack adapter. Confirm
+   one session survives requests distributed across both workers and that
+   logout/scope switch invalidates both workers' old cursor/cache state.
+2. Seed or select each reference-matrix collection shape. Run 30 cold and 100
+   warm samples per route with fixed RTT shaping; record p50/p75/p95/p99 rather
+   than an aggregate average.
+3. Capture `vantage_http_request_duration_seconds`,
+   `vantage_upstream_request_duration_seconds`, cache result counters, in-flight
+   saturation, browser Web Vitals, Vantage trace IDs, and OpenStack request IDs.
+4. Inject Nova slow/error, Neutron 403/429, Cinder timeout, Keystone expiry, and
+   Redis loss. Widget failures must remain partial; Redis loss must make
+   readiness fail and must not silently fall back to per-process production
+   state.
+5. Inspect Nova/Neutron/Glance/Cinder access logs for every list sample. Each
+   page must send only its supported server-side filters and bounded look-ahead;
+   no hidden count or full-list request is allowed.
+6. Exercise login, scope switch, mutation acknowledgement, and noVNC only when
+   their runtime slices are present. Verify console URLs and tokens are absent
+   from Redis, logs, spans, metrics, and error reports.
 
 ## Release Gate
 

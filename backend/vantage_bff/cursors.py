@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic
+from typing import Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,16 @@ class CursorLease:
     generation: int
     page: int
     marker: str | None
+
+
+class CursorStore(Protocol):
+    async def acquire(self, key: CursorKey, page: int) -> CursorLease | None: ...
+    async def complete(
+        self, lease: CursorLease, next_marker: str | None
+    ) -> tuple[int, ...] | None: ...
+    async def abandon(self, lease: CursorLease) -> None: ...
+    async def invalidate(self, key: CursorKey) -> None: ...
+    async def invalidate_namespace(self, scope_namespace: str) -> None: ...
 
 
 @dataclass(slots=True)

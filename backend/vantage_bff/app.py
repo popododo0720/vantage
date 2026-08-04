@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import logging
 import math
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -10,7 +11,7 @@ from typing import Annotated, Any, NoReturn, cast
 
 from fastapi import Cookie, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from vantage_bff.adapters.base import (
@@ -23,8 +24,9 @@ from vantage_bff.adapters.base import (
 )
 from vantage_bff.adapters.fake import FakeOpenStackAdapter
 from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
+from vantage_bff.cache import CacheKey
 from vantage_bff.config import Settings
-from vantage_bff.cursors import CursorKey, MemoryCursorStore
+from vantage_bff.cursors import CursorKey, CursorStore
 from vantage_bff.models import (
     FlavorPage,
     ImagePage,
@@ -51,10 +53,10 @@ from vantage_bff.models import (
     SortDirection,
     WidgetError,
 )
-from vantage_bff.operations import MemoryOperationStore, OperationStore
-from vantage_bff.rate_limit import LoginRateLimiter
+from vantage_bff.observability import Metrics, Timer, configure_logging, error_class
+from vantage_bff.operations import OperationStore
+from vantage_bff.platform import build_platform
 from vantage_bff.sessions import (
-    MemorySessionStore,
     SessionRecord,
     SessionStore,
     new_scope_namespace,
@@ -110,6 +112,7 @@ def _adapter(settings: Settings) -> OpenStackAdapter:
             instance_timeout_seconds=settings.instance_source_timeout_seconds,
             provisioning_timeout_seconds=settings.provisioning_source_timeout_seconds,
             thread_capacity=settings.openstack_sdk_thread_capacity,
+            connection_cache_size=settings.openstack_connection_cache_size,
         )
     raise RuntimeError(f"Unsupported adapter: {settings.adapter}")
 
@@ -118,7 +121,7 @@ def create_app(
     settings: Settings | None = None,
     adapter: OpenStackAdapter | None = None,
     store: SessionStore | None = None,
-    cursor_store: MemoryCursorStore | None = None,
+    cursor_store: CursorStore | None = None,
     operation_store: OperationStore | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
@@ -126,23 +129,38 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        platform = build_platform(active_settings)
+        active_adapter = adapter or _adapter(active_settings)
         app.state.settings = active_settings
-        app.state.adapter = adapter or _adapter(active_settings)
-        app.state.sessions = store or MemorySessionStore()
-        app.state.instance_cursors = cursor_store or MemoryCursorStore(
-            active_settings.instance_cursor_ttl_seconds,
-            active_settings.instance_cursor_max_chains,
-            active_settings.instance_cursor_max_pages,
+        app.state.adapter = active_adapter
+        app.state.platform = platform
+        app.state.sessions = store or platform.sessions
+        app.state.instance_cursors = cursor_store or platform.cursors
+        app.state.operations = operation_store or platform.operations
+        app.state.login_limiter = platform.login_limiter
+        app.state.quota_cache = platform.quota_cache
+        app.state.metrics = Metrics()
+        app.state.metrics.gauge_add(
+            "vantage_sdk_thread_capacity",
+            {},
+            active_settings.openstack_sdk_thread_capacity,
         )
-        app.state.operations = operation_store or MemoryOperationStore(
-            terminal_ttl_seconds=active_settings.operation_terminal_ttl_seconds,
-            max_records=active_settings.operation_max_records,
-        )
-        app.state.login_limiter = LoginRateLimiter(
-            active_settings.login_attempt_limit,
-            active_settings.login_attempt_window_seconds,
-        )
-        yield
+        app.state.logger = configure_logging()
+        try:
+            yield
+        finally:
+
+            async def shutdown() -> None:
+                close = getattr(active_adapter, "close", None)
+                if close is not None:
+                    await close()
+                await platform.close()
+
+            try:
+                async with asyncio.timeout(active_settings.shutdown_grace_seconds):
+                    await shutdown()
+            except TimeoutError:
+                cast(logging.Logger, app.state.logger).error("graceful shutdown timed out")
 
     app = FastAPI(title="Vantage BFF", version="0.3.0", lifespan=lifespan)
 
@@ -188,7 +206,9 @@ def create_app(
     async def trace(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        incoming_trace = request.headers.get("traceparent")
         request.state.trace_id = str(uuid.uuid4())
+        timer = Timer()
         response = await call_next(request)
         response.headers["X-Trace-ID"] = request.state.trace_id
         if request.url.path.startswith("/assets/"):
@@ -203,6 +223,30 @@ def create_app(
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        metrics = cast(Metrics, request.app.state.metrics)
+        labels = {
+            "method": request.method,
+            "route": str(route_path),
+            "status_class": error_class(response.status_code),
+        }
+        metrics.increment("vantage_http_requests", labels)
+        metrics.observe("vantage_http_request_duration_seconds", labels, timer.elapsed())
+        cast(logging.Logger, request.app.state.logger).info(
+            "request completed",
+            extra={
+                "fields": {
+                    "method": request.method,
+                    "route": str(route_path),
+                    "status": response.status_code,
+                    "duration_ms": round(timer.elapsed() * 1000, 3),
+                    "trace_id": request.state.trace_id,
+                    "upstream_request_id": response.headers.get("X-OpenStack-Request-ID"),
+                    "traceparent_present": bool(incoming_trace),
+                }
+            },
+        )
         return response
 
     def set_session_cookie(response: Response, record: SessionRecord) -> None:
@@ -244,12 +288,19 @@ def create_app(
             )
         return record
 
-    def instance_cursors(request: Request) -> MemoryCursorStore:
-        return cast(MemoryCursorStore, request.app.state.instance_cursors)
+    def instance_cursors(request: Request) -> CursorStore:
+        return cast(CursorStore, request.app.state.instance_cursors)
+
+    async def release_adapter_context(request: Request, record: SessionRecord) -> None:
+        close_context = getattr(request.app.state.adapter, "close_auth_context", None)
+        if close_context is not None:
+            await close_context(record.auth_context)
 
     async def invalidate_session(request: Request, record: SessionRecord) -> None:
         await request.app.state.sessions.delete(record.id)
         await instance_cursors(request).invalidate_namespace(record.scope_namespace)
+        await request.app.state.quota_cache.invalidate_policy_scope(record.scope_namespace)
+        await release_adapter_context(request, record)
 
     def active_scope(record: SessionRecord) -> Scope:
         if record.active_scope is None:
@@ -597,15 +648,69 @@ def create_app(
             )
 
         async def load(service: QuotaService) -> tuple[Quota, ...]:
-            return await asyncio.wait_for(
-                request.app.state.adapter.quotas(
-                    record.auth_context,
-                    scope.project.id,
-                    scope.region,
-                    service,
-                ),
-                timeout=active_settings.quota_source_timeout_seconds,
+            key = CacheKey(
+                user_id=record.user.id,
+                project_id=scope.project.id,
+                region=scope.region,
+                policy_scope=record.scope_namespace,
+                service=service.value,
+                resource="quota",
             )
+
+            async def upstream() -> dict[str, Any]:
+                timer = Timer()
+                metrics = cast(Metrics, request.app.state.metrics)
+                metrics.gauge_add(
+                    "vantage_upstream_requests_in_flight", {"service": service.value}, 1
+                )
+                try:
+                    result = await asyncio.wait_for(
+                        request.app.state.adapter.quotas(
+                            record.auth_context,
+                            scope.project.id,
+                            scope.region,
+                            service,
+                        ),
+                        timeout=active_settings.quota_source_timeout_seconds,
+                    )
+                    metrics.increment(
+                        "vantage_upstream_requests",
+                        {"service": service.value, "outcome": "success"},
+                    )
+                    return {"items": [item.model_dump(mode="json") for item in result]}
+                except BaseException:
+                    metrics.increment(
+                        "vantage_upstream_requests",
+                        {"service": service.value, "outcome": "error"},
+                    )
+                    raise
+                finally:
+                    metrics.gauge_add(
+                        "vantage_upstream_requests_in_flight", {"service": service.value}, -1
+                    )
+                    metrics.observe(
+                        "vantage_upstream_request_duration_seconds",
+                        {"service": service.value},
+                        timer.elapsed(),
+                    )
+
+            cached, hit, coalesced = await request.app.state.quota_cache.get_or_load(
+                key,
+                upstream,
+                active_settings.quota_cache_ttl_seconds,
+            )
+            metrics = cast(Metrics, request.app.state.metrics)
+            metrics.increment(
+                "vantage_cache_requests",
+                {
+                    "resource": "quota",
+                    "result": "hit" if hit else ("coalesced" if coalesced else "miss"),
+                },
+            )
+            raw_items = cached.get("items")
+            if not isinstance(raw_items, list):
+                raise ValueError("Cached quota payload is invalid")
+            return tuple(Quota.model_validate(item) for item in raw_items)
 
         results = await asyncio.gather(
             *(load(service) for service in services),
@@ -669,9 +774,20 @@ def create_app(
                 },
             )
         try:
-            result = await request.app.state.adapter.authenticate(
-                payload.username, payload.password, payload.domain
+            result = await asyncio.wait_for(
+                request.app.state.adapter.authenticate(
+                    payload.username, payload.password, payload.domain
+                ),
+                timeout=active_settings.identity_source_timeout_seconds,
             )
+        except TimeoutError as exc:
+            await request.app.state.login_limiter.release(limiter_key, reservation)
+            raise ApiError(
+                503,
+                "identity_timeout",
+                "Sign in temporarily unavailable",
+                "The identity service did not respond in time",
+            ) from exc
         except AuthenticationError as exc:
             raise ApiError(
                 401,
@@ -721,6 +837,10 @@ def create_app(
             await request.app.state.sessions.delete(previous_session_id)
             if previous is not None:
                 await instance_cursors(request).invalidate_namespace(previous.scope_namespace)
+                await request.app.state.quota_cache.invalidate_policy_scope(
+                    previous.scope_namespace
+                )
+                await release_adapter_context(request, previous)
         set_session_cookie(response, record)
         return record.public()
 
@@ -763,6 +883,8 @@ def create_app(
                 )
             await request.app.state.sessions.delete(record.id)
             await instance_cursors(request).invalidate_namespace(record.scope_namespace)
+            await request.app.state.quota_cache.invalidate_policy_scope(record.scope_namespace)
+            await release_adapter_context(request, record)
         response.delete_cookie(
             active_settings.cookie_name,
             path="/",
@@ -825,9 +947,19 @@ def create_app(
                 "The requested scope is not accessible",
             )
         try:
-            result = await request.app.state.adapter.scope(
-                record.auth_context, payload.project_id, payload.region
+            result = await asyncio.wait_for(
+                request.app.state.adapter.scope(
+                    record.auth_context, payload.project_id, payload.region
+                ),
+                timeout=active_settings.scope_source_timeout_seconds,
             )
+        except TimeoutError as exc:
+            raise ApiError(
+                503,
+                "identity_timeout",
+                "Scope temporarily unavailable",
+                "The identity service did not respond in time",
+            ) from exc
         except ScopeError as exc:
             if exc.status_code == 401:
                 await invalidate_session(request, record)
@@ -898,8 +1030,32 @@ def create_app(
             raise ApiError(401, "session_changed", "Authentication required", "Session has changed")
         if scope_changed:
             await instance_cursors(request).invalidate_namespace(record.scope_namespace)
+            await request.app.state.quota_cache.invalidate_policy_scope(record.scope_namespace)
+            await release_adapter_context(request, record)
         set_session_cookie(response, updated)
         return updated.public()
+
+    @app.get("/health/live", include_in_schema=False)
+    async def liveness() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/ready", include_in_schema=False)
+    async def readiness(request: Request, response: Response) -> dict[str, str]:
+        try:
+            ready = bool(await request.app.state.platform.ready())
+        except Exception:
+            ready = False
+        if not ready:
+            response.status_code = 503
+            return {"status": "not-ready"}
+        return {"status": "ready"}
+
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics(request: Request) -> PlainTextResponse:
+        if not active_settings.metrics_enabled:
+            return PlainTextResponse("metrics disabled\n", status_code=404)
+        metrics = cast(Metrics, request.app.state.metrics)
+        return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
     @app.get("/api/v1/overview", response_model=ProjectOverview)
     async def overview(

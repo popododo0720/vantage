@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 openstack = ["openstacksdk>=4.7,<5"]
+platform = ["redis>=6.4,<7"]
 dev = [
   "httpx>=0.28,<1",
   "mypy>=1.17,<2",
