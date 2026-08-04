@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, Self, TypedDict
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictModel(BaseModel):
@@ -224,6 +224,11 @@ class KeyPairType(StrEnum):
     X509 = "x509"
 
 
+class KeyPairMode(StrEnum):
+    IMPORT = "import"
+    GENERATE = "generate"
+
+
 class KeyPair(StrictModel):
     name: str
     type: KeyPairType | None = None
@@ -236,6 +241,26 @@ class KeyPair(StrictModel):
 class KeyPairPage(StrictModel):
     items: list[KeyPair]
     page: PageInfo
+
+
+class CreateKeyPairRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=255)
+    type: KeyPairType = KeyPairType.SSH
+    mode: KeyPairMode = KeyPairMode.IMPORT
+    public_key: str | None = Field(default=None, min_length=1, max_length=16384)
+
+    @model_validator(mode="after")
+    def validate_public_key_mode(self) -> Self:
+        if self.mode is KeyPairMode.IMPORT and self.public_key is None:
+            raise ValueError("public_key is required for import mode")
+        if self.mode is KeyPairMode.GENERATE and "public_key" in self.model_fields_set:
+            raise ValueError("public_key is forbidden for generate mode")
+        return self
+
+
+class CreatedKeyPair(StrictModel):
+    keypair: KeyPair
+    private_key: str = Field(min_length=1)
 
 
 class Network(StrictModel):
@@ -274,3 +299,21 @@ class Problem(StrictModel):
     code: str
     trace_id: str
     openstack_request_id: str | None = None
+
+
+class OperationTarget(StrictModel):
+    resource_type: str
+    resource_id: str | None = None
+    resource_name: str | None = None
+
+
+class Operation(StrictModel):
+    id: UUID
+    kind: str
+    status: Literal["accepted", "running", "succeeded", "failed", "cancelled"]
+    submitted_at: datetime
+    updated_at: datetime
+    target: OperationTarget
+    trace_id: str
+    openstack_request_ids: list[str]
+    problem: Problem | None

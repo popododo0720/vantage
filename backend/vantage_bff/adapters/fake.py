@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,8 @@ from vantage_bff.adapters.base import (
     AuthenticationError,
     AuthResult,
     InstanceListResult,
+    KeyPairCreateResult,
+    MutationResult,
     ProvisioningListResult,
     ScopeError,
     ScopeResult,
@@ -47,6 +50,9 @@ class FakeOpenStackAdapter:
         Project(id="project-alpha", name="Alpha", domain_id="default", enabled=True),
         Project(id="project-beta", name="Beta", domain_id="default", enabled=True),
     )
+
+    def __init__(self) -> None:
+        self._keypair_state: dict[tuple[str, str], dict[str, KeyPair]] = {}
 
     async def authenticate(self, username: str, password: str, domain: str) -> AuthResult:
         if password != "vantage":
@@ -242,8 +248,81 @@ class FakeOpenStackAdapter:
         marker: str | None,
     ) -> ProvisioningListResult:
         self._require_project_scope(auth_context, project_id, region)
-        items = list(self._keypairs(project_id))
+        items = list(self._keypairs(project_id, region))
         return self._page_resources(items, limit, marker)
+
+    async def create_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+        key_type: KeyPairType,
+        public_key: str | None,
+    ) -> KeyPairCreateResult:
+        self._require_project_scope(auth_context, project_id, region)
+        records = self._keypair_records(project_id, region)
+        if name in records:
+            raise AdapterError(status_code=409, request_id=self._request_id())
+
+        generated_public_key = (
+            f"ssh-rsa {secrets.token_urlsafe(48)}"
+            if key_type is KeyPairType.SSH
+            else (
+                "-----BEGIN CERTIFICATE-----\n"
+                f"{secrets.token_urlsafe(48)}\n"
+                "-----END CERTIFICATE-----"
+            )
+        )
+        public_material = public_key if public_key is not None else generated_public_key
+        keypair = KeyPair(
+            name=name,
+            type=key_type,
+            fingerprint=f"SHA256:{hashlib.sha256(public_material.encode()).hexdigest()[:32]}",
+            public_key_preview=(
+                f"{public_material[:61]}..."
+                if len(public_material) > 64
+                else public_material
+            ),
+            created_at=datetime.now(UTC),
+            last_used_at=None,
+        )
+        records[name] = keypair
+        private_key = None
+        if public_key is None:
+            private_key = (
+                (
+                    "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+                    f"{secrets.token_urlsafe(96)}\n"
+                    "-----END OPENSSH PRIVATE KEY-----"
+                )
+                if key_type is KeyPairType.SSH
+                else (
+                    "-----BEGIN PRIVATE KEY-----\n"
+                    f"{secrets.token_urlsafe(96)}\n"
+                    "-----END PRIVATE KEY-----"
+                )
+            )
+        return KeyPairCreateResult(
+            keypair=keypair,
+            private_key=private_key,
+            openstack_request_id=self._request_id(),
+        )
+
+    async def delete_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+    ) -> MutationResult:
+        self._require_project_scope(auth_context, project_id, region)
+        records = self._keypair_records(project_id, region)
+        if records.pop(name, None) is None:
+            raise AdapterError(status_code=404, request_id=self._request_id())
+        return MutationResult(openstack_request_id=self._request_id())
 
     async def list_networks(
         self,
@@ -344,7 +423,7 @@ class FakeOpenStackAdapter:
             for index in range(31)
         )
 
-    def _keypairs(self, project_id: str) -> tuple[KeyPair, ...]:
+    def _initial_keypairs(self, project_id: str) -> tuple[KeyPair, ...]:
         return tuple(
             KeyPair(
                 name=f"{project_id.removeprefix('project-')}-key-{index + 1:02d}",
@@ -358,6 +437,19 @@ class FakeOpenStackAdapter:
             )
             for index in range(31)
         )
+
+    def _keypairs(self, project_id: str, region: str) -> tuple[KeyPair, ...]:
+        return tuple(self._keypair_records(project_id, region).values())
+
+    def _keypair_records(self, project_id: str, region: str) -> dict[str, KeyPair]:
+        if not hasattr(self, "_keypair_state"):
+            self._keypair_state = {}
+        scope = (project_id, region)
+        records = self._keypair_state.get(scope)
+        if records is None:
+            records = {item.name: item for item in self._initial_keypairs(project_id)}
+            self._keypair_state[scope] = records
+        return records
 
     def _networks(self, project_id: str) -> tuple[Network, ...]:
         label = project_id.removeprefix("project-")

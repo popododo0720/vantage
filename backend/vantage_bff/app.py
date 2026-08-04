@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any, NoReturn, cast
 
 from fastapi import Cookie, Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Path as PathParameter
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,8 @@ from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
 from vantage_bff.config import Settings
 from vantage_bff.cursors import CursorKey, MemoryCursorStore
 from vantage_bff.models import (
+    CreatedKeyPair,
+    CreateKeyPairRequest,
     FlavorPage,
     ImagePage,
     ImageVisibility,
@@ -33,6 +36,7 @@ from vantage_bff.models import (
     InstancePage,
     InstanceSort,
     InstanceSummary,
+    KeyPairMode,
     KeyPairPage,
     LoginRequest,
     NetworkPage,
@@ -51,7 +55,29 @@ from vantage_bff.models import (
     SortDirection,
     WidgetError,
 )
-from vantage_bff.operations import MemoryOperationStore, OperationStore
+from vantage_bff.models import (
+    Operation as OperationResponse,
+)
+from vantage_bff.models import (
+    OperationTarget as OperationTargetResponse,
+)
+from vantage_bff.operations import (
+    BeginOperationResult,
+    IdempotencyConflictError,
+    MemoryOperationStore,
+    OperationCapacityError,
+    OperationScope,
+    OperationSnapshot,
+    OperationStatus,
+    OperationStore,
+    operation_fingerprint,
+)
+from vantage_bff.operations import (
+    OperationProblem as StoredOperationProblem,
+)
+from vantage_bff.operations import (
+    OperationTarget as StoredOperationTarget,
+)
 from vantage_bff.rate_limit import LoginRateLimiter
 from vantage_bff.sessions import (
     MemorySessionStore,
@@ -81,6 +107,34 @@ class ApiError(Exception):
         self.detail = detail
         self.openstack_request_id = openstack_request_id
         self.headers = headers or {}
+
+
+def _operation_response(snapshot: OperationSnapshot) -> OperationResponse:
+    problem = None
+    if snapshot.problem is not None:
+        problem = Problem(
+            title=snapshot.problem.title,
+            status=snapshot.problem.status,
+            detail=snapshot.problem.detail,
+            code=snapshot.problem.code,
+            trace_id=snapshot.trace_id,
+            openstack_request_id=snapshot.problem.openstack_request_id,
+        )
+    return OperationResponse(
+        id=snapshot.id,
+        kind=snapshot.kind,
+        status=snapshot.status.value,
+        submitted_at=snapshot.submitted_at,
+        updated_at=snapshot.updated_at,
+        target=OperationTargetResponse(
+            resource_type=snapshot.target.resource_type,
+            resource_id=snapshot.target.resource_id,
+            resource_name=snapshot.target.resource_name,
+        ),
+        trace_id=snapshot.trace_id,
+        openstack_request_ids=list(snapshot.openstack_request_ids),
+        problem=problem,
+    )
 
 
 def _navigable_pages(current: int, total: int) -> list[int]:
@@ -144,7 +198,7 @@ def create_app(
         )
         yield
 
-    app = FastAPI(title="Vantage BFF", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Vantage BFF", version="0.4.0", lifespan=lifespan)
 
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -260,6 +314,192 @@ def create_app(
                 "Select a project and region before requesting project resources",
             )
         return record.active_scope
+
+    def operations(request: Request) -> OperationStore:
+        return cast(OperationStore, request.app.state.operations)
+
+    def operation_scope(record: SessionRecord) -> OperationScope:
+        scope = active_scope(record)
+        return OperationScope(
+            user_id=record.user.id,
+            project_id=scope.project.id,
+            region=scope.region,
+        )
+
+    def validated_idempotency_key(
+        value: Annotated[
+            str | None,
+            Header(alias="Idempotency-Key", min_length=1, max_length=255),
+        ] = None,
+    ) -> str:
+        normalized = value.strip() if value is not None else ""
+        if not 16 <= len(normalized) <= 255:
+            raise ApiError(
+                422,
+                "invalid_request",
+                "Invalid request",
+                "Idempotency-Key must contain between 16 and 255 characters",
+            )
+        return normalized
+
+    async def begin_keypair_operation(
+        request: Request,
+        *,
+        scope: OperationScope,
+        idempotency_key: str,
+        kind: str,
+        fingerprint_payload: dict[str, Any],
+        name: str,
+    ) -> BeginOperationResult:
+        try:
+            return await operations(request).begin(
+                scope=scope,
+                idempotency_key=idempotency_key,
+                fingerprint=operation_fingerprint(kind, fingerprint_payload),
+                kind=kind,
+                target=StoredOperationTarget(
+                    resource_type="keypair",
+                    resource_name=name,
+                ),
+                trace_id=request.state.trace_id,
+            )
+        except IdempotencyConflictError as exc:
+            raise ApiError(
+                409,
+                "idempotency_conflict",
+                "Idempotency key conflict",
+                "The Idempotency-Key was already used with a different request",
+            ) from exc
+        except OperationCapacityError as exc:
+            raise ApiError(
+                503,
+                "operation_store_unavailable",
+                "Operation temporarily unavailable",
+                "The operation store cannot accept another mutation",
+            ) from exc
+
+    async def keypair_api_error(
+        request: Request,
+        record: SessionRecord,
+        exc: AdapterError,
+    ) -> ApiError:
+        if isinstance(exc, AdapterTimeoutError) or exc.status_code == 504:
+            return ApiError(
+                504,
+                "keypair_timeout",
+                "Key pair request timed out",
+                "The compute service did not respond in time",
+                openstack_request_id=exc.request_id,
+            )
+        if exc.status_code == 401:
+            await invalidate_session(request, record)
+            return ApiError(
+                401,
+                "unauthenticated",
+                "Authentication required",
+                "Session missing or expired",
+                openstack_request_id=exc.request_id,
+            )
+        if exc.status_code == 400:
+            return ApiError(
+                422,
+                "invalid_keypair",
+                "Invalid key pair request",
+                "The compute service rejected the key pair request",
+                openstack_request_id=exc.request_id,
+            )
+        if exc.status_code == 403:
+            return ApiError(
+                403,
+                "keypair_forbidden",
+                "Key pair request denied",
+                "The compute policy denied this request",
+                openstack_request_id=exc.request_id,
+            )
+        if exc.status_code == 404:
+            return ApiError(
+                404,
+                "keypair_not_found",
+                "Key pair not found",
+                "The key pair or compute endpoint does not exist in the active scope",
+                openstack_request_id=exc.request_id,
+            )
+        if exc.status_code == 409:
+            return ApiError(
+                409,
+                "keypair_conflict",
+                "Key pair conflict",
+                "The key pair request conflicts with the current compute state",
+                openstack_request_id=exc.request_id,
+            )
+        if exc.status_code == 429:
+            return ApiError(
+                429,
+                "keypair_rate_limited",
+                "Key pair request rate limited",
+                "The compute service temporarily rate limited this request",
+                openstack_request_id=exc.request_id,
+            )
+        return ApiError(
+            503,
+            "keypair_unavailable",
+            "Key pair service unavailable",
+            "The compute service is temporarily unavailable",
+            openstack_request_id=exc.request_id,
+        )
+
+    async def fail_keypair_operation(
+        request: Request,
+        *,
+        scope: OperationScope,
+        operation_id: uuid.UUID,
+        error: ApiError,
+        cause: BaseException,
+    ) -> NoReturn:
+        await operations(request).fail(
+            scope,
+            operation_id,
+            problem=StoredOperationProblem(
+                status=error.status,
+                code=error.code,
+                title=error.title,
+                detail=error.detail,
+                openstack_request_id=error.openstack_request_id,
+            ),
+            openstack_request_ids=(
+                (error.openstack_request_id,) if error.openstack_request_id else ()
+            ),
+        )
+        raise error from cause
+
+    async def raise_replayed_failure(
+        request: Request,
+        record: SessionRecord,
+        snapshot: OperationSnapshot,
+    ) -> None:
+        if snapshot.status is not OperationStatus.FAILED:
+            return
+        if snapshot.problem is None:
+            raise ApiError(
+                503,
+                "operation_state_unavailable",
+                "Operation state unavailable",
+                "The failed operation has no recorded problem",
+            )
+        problem = snapshot.problem
+        if problem.status == 401:
+            await invalidate_session(request, record)
+        raise ApiError(
+            problem.status,
+            problem.code,
+            problem.title,
+            problem.detail,
+            openstack_request_id=problem.openstack_request_id,
+        )
+
+    def preserve_operation_request_id(response: Response, snapshot: OperationSnapshot) -> None:
+        if snapshot.openstack_request_ids:
+            response.headers["X-OpenStack-Request-ID"] = snapshot.openstack_request_ids[-1]
 
     def instance_cursor_key(
         record: SessionRecord,
@@ -1067,6 +1307,247 @@ def create_app(
             load=load,
         )
         return KeyPairPage(items=items, page=page_info)
+
+    @app.post(
+        "/api/v1/keypairs",
+        response_model=CreatedKeyPair | OperationResponse,
+        status_code=201,
+    )
+    async def create_keypair(
+        payload: CreateKeyPairRequest,
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(csrf_session)],
+        idempotency_key: Annotated[str, Depends(validated_idempotency_key)],
+    ) -> CreatedKeyPair | OperationResponse:
+        scope = operation_scope(record)
+        kind = f"keypair.{payload.mode.value}"
+        begun = await begin_keypair_operation(
+            request,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            kind=kind,
+            fingerprint_payload=payload.model_dump(mode="json"),
+            name=payload.name,
+        )
+        if begun.replayed:
+            await raise_replayed_failure(request, record, begun.operation)
+            if payload.mode is KeyPairMode.GENERATE:
+                request_id = (
+                    begun.operation.openstack_request_ids[-1]
+                    if begun.operation.openstack_request_ids
+                    else None
+                )
+                if begun.operation.status in {
+                    OperationStatus.ACCEPTED,
+                    OperationStatus.RUNNING,
+                }:
+                    raise ApiError(
+                        409,
+                        "operation_in_progress",
+                        "Operation in progress",
+                        "The original key pair request is still being processed",
+                        openstack_request_id=request_id,
+                    )
+                raise ApiError(
+                    409,
+                    "one_time_secret_unavailable",
+                    "Private key unavailable",
+                    "Generated private key material is only returned to the original request",
+                    openstack_request_id=request_id,
+                )
+            response.status_code = 202
+            preserve_operation_request_id(response, begun.operation)
+            return _operation_response(begun.operation)
+
+        await operations(request).mark_running(scope, begun.operation.id)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+        try:
+            result = await asyncio.wait_for(
+                adapter.create_keypair(
+                    record.auth_context,
+                    scope.project_id,
+                    scope.region,
+                    name=payload.name,
+                    key_type=payload.type,
+                    public_key=payload.public_key,
+                ),
+                timeout=active_settings.provisioning_source_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            error = await keypair_api_error(request, record, AdapterTimeoutError())
+            await fail_keypair_operation(
+                request,
+                scope=scope,
+                operation_id=begun.operation.id,
+                error=error,
+                cause=exc,
+            )
+        except AdapterError as exc:
+            error = await keypair_api_error(request, record, exc)
+            await fail_keypair_operation(
+                request,
+                scope=scope,
+                operation_id=begun.operation.id,
+                error=error,
+                cause=exc,
+            )
+
+        generated_private_key = result.private_key
+        if payload.mode is KeyPairMode.GENERATE and not generated_private_key:
+            malformed = AdapterError(
+                status_code=503,
+                request_id=result.openstack_request_id,
+            )
+            error = await keypair_api_error(request, record, malformed)
+            await fail_keypair_operation(
+                request,
+                scope=scope,
+                operation_id=begun.operation.id,
+                error=error,
+                cause=malformed,
+            )
+
+        succeeded = await operations(request).succeed(
+            scope,
+            begun.operation.id,
+            target=StoredOperationTarget(
+                resource_type="keypair",
+                resource_name=result.keypair.name,
+            ),
+            openstack_request_ids=(
+                (result.openstack_request_id,) if result.openstack_request_id else ()
+            ),
+        )
+        if succeeded is None:
+            raise ApiError(
+                503,
+                "operation_state_unavailable",
+                "Operation state unavailable",
+                "The key pair operation state could not be recorded",
+            )
+        preserve_operation_request_id(response, succeeded)
+        if payload.mode is KeyPairMode.IMPORT:
+            response.status_code = 202
+            return _operation_response(succeeded)
+
+        if generated_private_key is None:
+            raise ApiError(
+                503,
+                "keypair_unavailable",
+                "Key pair service unavailable",
+                "The compute service did not return generated private key material",
+            )
+        response.status_code = 201
+        return CreatedKeyPair(
+            keypair=result.keypair,
+            private_key=generated_private_key,
+        )
+
+    @app.delete(
+        "/api/v1/keypairs/{keypair_name:path}",
+        response_model=OperationResponse,
+        status_code=202,
+    )
+    async def delete_keypair(
+        keypair_name: Annotated[str, PathParameter(min_length=1, max_length=255)],
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(csrf_session)],
+        idempotency_key: Annotated[str, Depends(validated_idempotency_key)],
+    ) -> OperationResponse:
+        scope = operation_scope(record)
+        begun = await begin_keypair_operation(
+            request,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            kind="keypair.delete",
+            fingerprint_payload={"name": keypair_name},
+            name=keypair_name,
+        )
+        if begun.replayed:
+            await raise_replayed_failure(request, record, begun.operation)
+            preserve_operation_request_id(response, begun.operation)
+            return _operation_response(begun.operation)
+
+        await operations(request).mark_running(scope, begun.operation.id)
+        adapter = cast(OpenStackAdapter, request.app.state.adapter)
+        try:
+            result = await asyncio.wait_for(
+                adapter.delete_keypair(
+                    record.auth_context,
+                    scope.project_id,
+                    scope.region,
+                    name=keypair_name,
+                ),
+                timeout=active_settings.provisioning_source_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            error = await keypair_api_error(request, record, AdapterTimeoutError())
+            await fail_keypair_operation(
+                request,
+                scope=scope,
+                operation_id=begun.operation.id,
+                error=error,
+                cause=exc,
+            )
+        except AdapterError as exc:
+            error = await keypair_api_error(request, record, exc)
+            await fail_keypair_operation(
+                request,
+                scope=scope,
+                operation_id=begun.operation.id,
+                error=error,
+                cause=exc,
+            )
+
+        succeeded = await operations(request).succeed(
+            scope,
+            begun.operation.id,
+            openstack_request_ids=(
+                (result.openstack_request_id,) if result.openstack_request_id else ()
+            ),
+        )
+        if succeeded is None:
+            raise ApiError(
+                503,
+                "operation_state_unavailable",
+                "Operation state unavailable",
+                "The key pair operation state could not be recorded",
+            )
+        preserve_operation_request_id(response, succeeded)
+        return _operation_response(succeeded)
+
+    @app.get("/api/v1/operations/{operation_id}", response_model=OperationResponse)
+    async def get_operation(
+        operation_id: uuid.UUID,
+        request: Request,
+        response: Response,
+        record: Annotated[SessionRecord, Depends(current_session)],
+    ) -> OperationResponse:
+        active = record.active_scope
+        if active is None:
+            raise ApiError(
+                404,
+                "operation_not_found",
+                "Operation not found",
+                "The operation does not exist in the active scope",
+            )
+        scope = OperationScope(
+            user_id=record.user.id,
+            project_id=active.project.id,
+            region=active.region,
+        )
+        snapshot = await operations(request).get(scope, operation_id)
+        if snapshot is None:
+            raise ApiError(
+                404,
+                "operation_not_found",
+                "Operation not found",
+                "The operation does not exist in the active scope",
+            )
+        preserve_operation_request_id(response, snapshot)
+        return _operation_response(snapshot)
 
     @app.get("/api/v1/networks", response_model=NetworkPage)
     async def networks(

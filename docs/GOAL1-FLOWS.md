@@ -160,8 +160,15 @@ selection.
   contract.
 - Images distinguish project, shared, community, and public visibility when
   the cloud exposes those values.
-- A generated private key is returned once and is never persisted or shown
-  again. Imported public keys never ask Vantage for private material.
+- The OpenStack 2026.1 default is public-key import at Nova microversion 2.92,
+  where `public_key` is required. Explicit compatibility generation uses
+  microversion 2.10, returns private material once, and never persists or logs
+  it. Imported public keys never ask Vantage for private material.
+- Generated private material is shown in a dedicated one-time result state;
+  closing it is irreversible and a replay cannot recover the value.
+- Key-pair names, fingerprints, and public material are read-only after create.
+  Deletion requires a named confirmation and uses the shared idempotency and
+  operation contract.
 
 ### Create Instance
 

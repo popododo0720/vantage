@@ -87,7 +87,7 @@ same descriptors so an option cannot silently exist in only one workflow.
 | Instance | Image/volume/snapshot source, Flavor, networks/ports/fixed IPs, security groups, key pair, AZ, metadata, tags, user data, config drive, server group, scheduler hints, block devices, min/max count, hostname, description | Name/description, metadata/tags, security groups, NICs, fixed IPs, Floating IPs, volume attachments, start/stop, soft/hard reboot, pause/unpause, suspend/resume, shelve/unshelve, lock/unlock, rescue/unrescue, rebuild, resize, confirm/revert resize, console | Yes; preview ports, Floating IPs, attached volumes, and boot-volume retention |
 | Image | Upload/import and source URL where Glance supports it | Name, visibility, protected state, min disk/RAM, properties, tags, activate/deactivate, member access | Yes |
 | Flavor (admin) | ID/name, vCPU, RAM, root/ephemeral disk, swap, RX/TX factor, visibility, description, extra specs, project access | Description, extra specs, and project access. Base sizing is immutable and uses `Clone as new` | Yes |
-| Key pair | Generate or import public key | No upstream rename/edit; fingerprint and public key are read-only | Yes |
+| Key pair | Import public key by default at Nova 2.92; explicit compatibility generation at 2.10 | No upstream rename/edit; fingerprint and public key are read-only | Yes |
 
 ### Flavor Rule
 
@@ -175,7 +175,7 @@ explicit non-Available state.
 | Instance | List/show/create, rename, lifecycle actions, resize/confirm/revert, delete preview/delete, noVNC | Contracted | `/instances*`, `/operations*`; Compute Goal 1 boards |
 | Image | Server-filtered project-visible inventory for provisioning | Contracted | `GET /images`; Images board |
 | Flavor | Server-filtered project-allowed inventory for provisioning | Contracted | `GET /flavors`; Create Instance descriptors |
-| Key pair | List, generate/import, one-time private key, delete | Contracted | `/keypairs*`; Key Pairs board |
+| Key pair | List, default import, compatibility generation with one-time private key, delete | Contracted | `/keypairs*`, `/operations*`; Key Pairs board |
 | Network/security group | Server-filtered inventories used by provisioning | Contracted | `GET /networks`, `GET /security-groups` |
 | NIC and port | List, attach/detach, supported MAC/fixed-IP/security-group/QoS edits | Contracted | `/instances/{id}/interfaces*`, `PATCH /ports/{id}`; Instance Network and NIC Edit |
 | Floating IP | List, allocate, associate/move/disassociate, release | Contracted | `/floating-ips*`; Instance Network |

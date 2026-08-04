@@ -1,4 +1,6 @@
 import type {
+  CreatedKeyPair,
+  CreateKeyPairRequest,
   InstanceDetail,
   InstancePage,
   InstanceQuery,
@@ -6,6 +8,7 @@ import type {
   ImageQuery,
   InventoryQuery,
   KeyPairPage,
+  Operation,
   Problem,
   ProjectOverview,
   ProjectPage,
@@ -75,6 +78,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+function mutationHeaders(): HeadersInit {
+  if (typeof crypto.randomUUID === 'function') {
+    return { 'Idempotency-Key': crypto.randomUUID() }
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return { 'Idempotency-Key': `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}` }
+}
+
 export const api = {
   session: () => request<Session>('/session'),
   login: (username: string, password: string, domain: string) => {
@@ -133,6 +147,17 @@ export const api = {
     })
     return request<KeyPairPage>(`/keypairs?${query}`, { signal })
   },
+  createKeyPair: (payload: CreateKeyPairRequest) =>
+    request<Operation | CreatedKeyPair>('/keypairs', {
+      method: 'POST',
+      headers: mutationHeaders(),
+      body: JSON.stringify(payload),
+    }),
+  deleteKeyPair: (name: string) =>
+    request<Operation>(`/keypairs/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: mutationHeaders(),
+    }),
   instance: (instanceId: string, signal?: AbortSignal) =>
     request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),
   logout: async () => {

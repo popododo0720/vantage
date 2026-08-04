@@ -27,7 +27,7 @@ requirements exist.
 | Instance networking | NIC inspect/edit/attach/detach, fixed IP and MAC fields, security groups, Floating IP associate/disassociate/release | Verified |
 | Instance storage | volume attach/detach and attachment-conflict recovery | Verified |
 | Images and Flavors | server-filtered provisioning inventories | Verified |
-| Key pairs | generate/import, one-time private key, delete confirm | Verified |
+| Key pairs | default import, explicit compatibility generation with one-time private key, delete confirm | Verified |
 | Localization | English/Korean controls and action terminology | Verified |
 
 ## Goal 2 Network Design

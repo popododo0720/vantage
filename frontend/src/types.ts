@@ -103,7 +103,7 @@ export interface ImagePage {
 
 export interface KeyPair {
   name: string
-  type: 'ssh' | 'x509' | null
+  type: KeyPairType | null
   fingerprint: string | null
   public_key_preview?: string | null
   created_at?: string | null
@@ -113,6 +113,39 @@ export interface KeyPair {
 export interface KeyPairPage {
   items: KeyPair[]
   page: PageInfo
+}
+
+export type KeyPairType = 'ssh' | 'x509'
+export type KeyPairMode = 'import' | 'generate'
+
+export interface CreateKeyPairRequest {
+  name: string
+  type: KeyPairType
+  mode: KeyPairMode
+  public_key?: string
+}
+
+export interface CreatedKeyPair {
+  keypair: KeyPair
+  private_key: string
+}
+
+export interface OperationTarget {
+  resource_type: string
+  resource_id: string | null
+  resource_name: string | null
+}
+
+export interface Operation {
+  id: string
+  kind: string
+  status: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  submitted_at: string
+  updated_at: string
+  target: OperationTarget
+  trace_id: string
+  openstack_request_ids: string[]
+  problem: Problem | null
 }
 
 export interface InstanceVolume {

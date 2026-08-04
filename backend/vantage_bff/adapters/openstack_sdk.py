@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, ParamSpec, TypeVar, cast
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from vantage_bff.adapters.base import (
@@ -12,6 +13,8 @@ from vantage_bff.adapters.base import (
     AuthenticationError,
     AuthResult,
     InstanceListResult,
+    KeyPairCreateResult,
+    MutationResult,
     ProvisioningListResult,
     ScopeError,
     ScopeResult,
@@ -53,7 +56,7 @@ _QUOTA_SPECS: dict[QuotaService, tuple[tuple[str, tuple[str, ...], QuotaUnit], .
     ),
 }
 
-_APP_VERSION = "0.3.0"
+_APP_VERSION = "0.4.0"
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
 
@@ -282,6 +285,42 @@ class OpenStackSdkAdapter:
             region,
             limit=limit,
             marker=marker,
+        )
+
+    async def create_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+        key_type: KeyPairType,
+        public_key: str | None,
+    ) -> KeyPairCreateResult:
+        return await self._sdk_threads.run(
+            self._create_keypair,
+            auth_context,
+            project_id,
+            region,
+            name=name,
+            key_type=key_type,
+            public_key=public_key,
+        )
+
+    async def delete_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+    ) -> MutationResult:
+        return await self._sdk_threads.run(
+            self._delete_keypair,
+            auth_context,
+            project_id,
+            region,
+            name=name,
         )
 
     async def list_networks(
@@ -571,6 +610,98 @@ class OpenStackSdkAdapter:
             normalizer=_normalize_keypair,
             required_microversion="2.35",
         )
+
+    def _create_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+        key_type: KeyPairType,
+        public_key: str | None,
+    ) -> KeyPairCreateResult:
+        correlation_id = _global_request_id()
+        try:
+            from openstack import exceptions, utils
+
+            connection = self._project_connection(
+                auth_context,
+                project_id,
+                region,
+                correlation_id,
+                request_timeout_seconds=self.provisioning_timeout_seconds,
+            )
+            session = cast(Any, connection.compute)
+            body: dict[str, Any] = {
+                "keypair": {
+                    "name": name,
+                    "type": key_type.value,
+                }
+            }
+            if public_key is None:
+                # Nova 2.92 rejects server-side key generation. Pin the legacy
+                # behavior even when the cloud supports a newer microversion.
+                microversion = utils.pick_microversion(session, "2.10")
+            else:
+                body["keypair"]["public_key"] = public_key
+                microversion = utils.pick_microversion(session, "2.92")
+            response = session.post(
+                "/os-keypairs",
+                headers={"Accept": "application/json"},
+                json=body,
+                microversion=microversion,
+            )
+            exceptions.raise_from_response(response)
+            data = response.json()
+            if not isinstance(data, Mapping):
+                raise ValueError("Nova keypair create response must be an object")
+            resource = data.get("keypair")
+            if not isinstance(resource, Mapping):
+                raise ValueError("Nova keypair create response must contain a keypair")
+            private_key = _optional_text(resource, "private_key")
+            if public_key is None and not private_key:
+                raise ValueError("Nova generated keypair response must contain a private key")
+            return KeyPairCreateResult(
+                keypair=_normalize_keypair(resource),
+                private_key=private_key,
+                openstack_request_id=_response_request_id(response) or correlation_id,
+            )
+        except Exception as exc:
+            raise _provisioning_failure(exc) from exc
+
+    def _delete_keypair(
+        self,
+        auth_context: dict[str, Any],
+        project_id: str,
+        region: str,
+        *,
+        name: str,
+    ) -> MutationResult:
+        correlation_id = _global_request_id()
+        try:
+            from openstack import exceptions, utils
+
+            connection = self._project_connection(
+                auth_context,
+                project_id,
+                region,
+                correlation_id,
+                request_timeout_seconds=self.provisioning_timeout_seconds,
+            )
+            session = cast(Any, connection.compute)
+            microversion = utils.pick_microversion(session, "2.10")
+            response = session.delete(
+                f"/os-keypairs/{quote(name, safe='')}",
+                headers={"Accept": "application/json"},
+                microversion=microversion,
+            )
+            exceptions.raise_from_response(response)
+            return MutationResult(
+                openstack_request_id=_response_request_id(response) or correlation_id,
+            )
+        except Exception as exc:
+            raise _provisioning_failure(exc) from exc
 
     def _list_networks(
         self,

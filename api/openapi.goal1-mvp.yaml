@@ -34,7 +34,7 @@ tags:
   - name: Flavors
     description: Server-filtered Nova Flavor inventory.
   - name: KeyPairs
-    description: Project keypair inventory and one-time key generation.
+    description: Project key-pair import, compatibility generation, and deletion.
   - name: Networks
     description: Goal 1 Neutron networks, ports, and interface attachments.
   - name: SecurityGroups
@@ -674,7 +674,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
     post:
       tags: [KeyPairs]
-      summary: Generate or import a keypair
+      summary: Import a public key or use Nova compatibility generation
       operationId: createKeyPair
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -687,11 +687,17 @@ paths:
               $ref: "#/components/schemas/CreateKeyPairRequest"
       responses:
         "201":
-          description: Created keypair; generated private material appears once
+          description: Compatibility-generated key pair; private material appears once.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreatedKeyPair"
+        "202":
+          description: Completed or accepted idempotent import operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -714,8 +720,12 @@ paths:
         - $ref: "#/components/parameters/CsrfToken"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        "204":
-          description: Keypair deleted
+        "202":
+          description: Completed or accepted idempotent deletion operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -2106,7 +2116,7 @@ components:
     OperationTarget:
       type: object
       additionalProperties: false
-      required: [resource_type]
+      required: [resource_type, resource_id, resource_name]
       properties:
         resource_type:
           type: string
@@ -2121,7 +2131,16 @@ components:
     Operation:
       type: object
       additionalProperties: false
-      required: [id, kind, status, submitted_at, target]
+      required:
+        - id
+        - kind
+        - status
+        - submitted_at
+        - updated_at
+        - target
+        - trace_id
+        - openstack_request_ids
+        - problem
       properties:
         id:
           type: string
@@ -2370,7 +2389,7 @@ components:
     CreateKeyPairRequest:
       type: object
       additionalProperties: false
-      required: [name, type]
+      required: [name, type, mode]
       properties:
         name:
           type: string
@@ -2380,11 +2399,31 @@ components:
           type: string
           enum: [ssh, x509]
           default: ssh
+        mode:
+          type: string
+          enum: [import, generate]
+          default: import
         public_key:
           anyOf:
             - type: string
+              minLength: 1
+              maxLength: 16384
             - type: "null"
-          description: Null generates a keypair; a value imports public material.
+          description: Required for import and forbidden for compatibility generation.
+      allOf:
+        - if:
+            properties: {mode: {const: import}}
+            required: [mode]
+          then:
+            required: [public_key]
+            properties:
+              public_key: {type: string, minLength: 1, maxLength: 16384}
+        - if:
+            properties: {mode: {const: generate}}
+            required: [mode]
+          then:
+            properties:
+              public_key: {type: "null"}
     CreatedKeyPair:
       type: object
       additionalProperties: false
@@ -2393,10 +2432,8 @@ components:
         keypair:
           $ref: "#/components/schemas/KeyPair"
         private_key:
-          anyOf:
-            - type: string
-            - type: "null"
-          description: One-time generated private material; never persisted by Vantage.
+          type: string
+          description: One-time generated private material; never persisted or logged by Vantage.
     Network:
       type: object
       additionalProperties: false

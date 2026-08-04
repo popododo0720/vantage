@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Vantage BFF API
-  version: 0.3.0
-  summary: Implemented session, project-scope, quota, and instance inventory API
+  version: 0.4.0
+  summary: Implemented project console API through key-pair management
   description: |
     Browser-facing API implemented by the current Vantage runtime. The browser
     never receives an OpenStack token or calls an OpenStack service endpoint
@@ -25,6 +25,10 @@ tags:
     description: Bounded, project-scoped Nova inventory and instance details.
   - name: Provisioning Inputs
     description: Bounded, project-scoped inventories used to provision instances.
+  - name: Operations
+    description: Scope-bound idempotent mutation state and OpenStack request correlation.
+  - name: KeyPairs
+    description: Project key-pair import, compatibility generation, and deletion.
 paths:
   /session:
     get:
@@ -368,6 +372,77 @@ paths:
         "503": {$ref: "#/components/responses/ServiceUnavailable"}
         "504": {$ref: "#/components/responses/GatewayTimeout"}
         "422": {$ref: "#/components/responses/InvalidRequest"}
+    post:
+      tags: [KeyPairs]
+      summary: Import a public key or use Nova compatibility generation
+      operationId: createKeyPair
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateKeyPairRequest"}
+      responses:
+        "201":
+          description: Compatibility-generated key pair with one-time private material.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreatedKeyPair"}
+        "202":
+          description: Completed or accepted idempotent import operation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /keypairs/{keypair_name}:
+    delete:
+      tags: [KeyPairs]
+      summary: Delete a project key pair
+      operationId: deleteKeyPair
+      parameters:
+        - name: keypair_name
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 255}
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Completed or accepted idempotent deletion operation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /operations/{operation_id}:
+    get:
+      tags: [Operations]
+      summary: Get mutation state in the active scope
+      operationId: getOperation
+      parameters:
+        - $ref: "#/components/parameters/OperationId"
+      responses:
+        "200":
+          description: Current operation state and request correlation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
   /networks:
     get:
       tags: [Provisioning Inputs]
@@ -471,6 +546,22 @@ components:
       description: Bound to the current Vantage server session.
       schema:
         type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique per logical mutation within the active user, project, and region.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 255
+    OperationId:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     OptionalCsrfToken:
       name: X-CSRF-Token
       in: header
@@ -831,6 +922,76 @@ components:
       properties:
         items: {type: array, items: {$ref: "#/components/schemas/KeyPair"}}
         page: {$ref: "#/components/schemas/PageInfo"}
+    CreateKeyPairRequest:
+      type: object
+      additionalProperties: false
+      required: [name, type, mode]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        type: {type: string, enum: [ssh, x509], default: ssh}
+        mode: {type: string, enum: [import, generate], default: import}
+        public_key:
+          anyOf:
+            - {type: string, minLength: 1, maxLength: 16384}
+            - {type: "null"}
+          description: Required for import and forbidden for compatibility generation.
+      allOf:
+        - if:
+            properties: {mode: {const: import}}
+            required: [mode]
+          then:
+            required: [public_key]
+            properties: {public_key: {type: string, minLength: 1, maxLength: 16384}}
+        - if:
+            properties: {mode: {const: generate}}
+            required: [mode]
+          then:
+            properties: {public_key: {type: "null"}}
+    CreatedKeyPair:
+      type: object
+      additionalProperties: false
+      required: [keypair, private_key]
+      properties:
+        keypair: {$ref: "#/components/schemas/KeyPair"}
+        private_key:
+          type: string
+          description: One-time private material; Vantage never persists or logs this value.
+    OperationTarget:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id, resource_name]
+      properties:
+        resource_type: {type: string}
+        resource_id: {anyOf: [{type: string}, {type: "null"}]}
+        resource_name: {anyOf: [{type: string}, {type: "null"}]}
+    Operation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - status
+        - submitted_at
+        - updated_at
+        - target
+        - trace_id
+        - openstack_request_ids
+        - problem
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string}
+        status: {type: string, enum: [accepted, running, succeeded, failed, cancelled]}
+        submitted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        target: {$ref: "#/components/schemas/OperationTarget"}
+        trace_id: {type: string}
+        openstack_request_ids:
+          type: array
+          items: {type: string}
+        problem:
+          anyOf:
+            - {$ref: "#/components/schemas/Problem"}
+            - {type: "null"}
     Network:
       type: object
       additionalProperties: false
@@ -1070,4 +1231,6 @@ components:
         trace_id:
           type: string
         openstack_request_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
