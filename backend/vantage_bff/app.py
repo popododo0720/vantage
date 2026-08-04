@@ -61,6 +61,10 @@ from vantage_bff.sessions import (
     new_session,
     rotated_session,
 )
+from vantage_bff.storage.base import StorageAdapter
+from vantage_bff.storage.fake import FakeStorageAdapter
+from vantage_bff.storage.openstack_sdk import OpenStackSdkStorageAdapter
+from vantage_bff.storage.router import create_storage_router
 
 
 class ApiError(Exception):
@@ -120,6 +124,7 @@ def create_app(
     store: SessionStore | None = None,
     cursor_store: MemoryCursorStore | None = None,
     operation_store: OperationStore | None = None,
+    storage_adapter: StorageAdapter | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_env()
     frontend_root = Path(__file__).resolve().parents[2] / "frontend" / "dist"
@@ -128,6 +133,16 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = active_settings
         app.state.adapter = adapter or _adapter(active_settings)
+        if storage_adapter is not None:
+            app.state.storage_adapter = storage_adapter
+        elif isinstance(app.state.adapter, OpenStackSdkAdapter):
+            app.state.storage_adapter = OpenStackSdkStorageAdapter(
+                app.state.adapter._sdk_threads,
+                app.state.adapter._project_connection,
+                float(active_settings.request_timeout_seconds),
+            )
+        else:
+            app.state.storage_adapter = FakeStorageAdapter()
         app.state.sessions = store or MemorySessionStore()
         app.state.instance_cursors = cursor_store or MemoryCursorStore(
             active_settings.instance_cursor_ttl_seconds,
@@ -1298,6 +1313,17 @@ def create_app(
             response.headers["X-OpenStack-Request-ID"] = result.openstack_request_id
         return result
 
+    storage_router = create_storage_router(
+        current_session=current_session,
+        csrf_session=csrf_session,
+        active_scope=active_scope,
+        error=ApiError,
+        navigable_pages=_navigable_pages,
+        timeout_seconds=float(active_settings.request_timeout_seconds),
+    )
+    # Keep routes flat for contract inspection and older deployment tooling.
+    app.router.routes.extend(storage_router.routes)
+
     if (frontend_root / "index.html").is_file():
         app.mount(
             "/assets",
@@ -1314,6 +1340,9 @@ def create_app(
         @app.get("/instances/{instance_id}", include_in_schema=False)
         @app.get("/images", include_in_schema=False)
         @app.get("/keypairs", include_in_schema=False)
+        @app.get("/volumes", include_in_schema=False)
+        @app.get("/volume-snapshots", include_in_schema=False)
+        @app.get("/volume-backups", include_in_schema=False)
         async def frontend() -> FileResponse:
             return FileResponse(frontend_root / "index.html")
 

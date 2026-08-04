@@ -140,6 +140,7 @@ server session retains the Keystone membership snapshot used for scope checks.
 - [Penpot design completion audit](docs/DESIGN-QA.md)
 - [Goal 1.3 quota overview verification](docs/GOAL1-3-VERIFICATION.md)
 - [Implemented BFF OpenAPI](api/openapi.yaml)
+- [Storage and Cinder verification](docs/STORAGE-VERIFICATION.md)
 - [Planned Goal 1 MVP OpenAPI](api/openapi.goal1-mvp.yaml)
 
 ## Working Surfaces

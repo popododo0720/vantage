@@ -163,3 +163,108 @@ export interface InstanceSummary {
 export interface ProjectOverview extends QuotaPayload {
   instance_summary: InstanceSummary | null
 }
+
+export type StorageResource = 'volumes' | 'snapshots' | 'backups' | 'types' | 'qos' | 'pools' | 'services'
+
+export interface StorageQuery extends InventoryQuery {
+  resource: StorageResource
+  name: string
+  status: string
+  sort: 'created_at' | 'name' | 'status'
+  direction: 'asc' | 'desc'
+}
+
+export interface Attachment {
+  server_id?: string | null
+  attachment_id?: string | null
+  device?: string | null
+}
+
+export interface Volume {
+  id: string
+  name?: string | null
+  description?: string | null
+  status: string
+  size_gib: number
+  volume_type?: string | null
+  availability_zone?: string | null
+  bootable?: boolean | null
+  encrypted?: boolean | null
+  multiattach?: boolean | null
+  read_only?: boolean | null
+  metadata: Record<string, string>
+  attachments: Attachment[]
+  snapshot_id?: string | null
+  source_volume_id?: string | null
+  image_id?: string | null
+  project_id?: string | null
+  host?: string | null
+  migration_status?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface VolumeSnapshot {
+  id: string
+  volume_id: string
+  name?: string | null
+  description?: string | null
+  status: string
+  size_gib: number
+  metadata: Record<string, string>
+  project_id?: string | null
+  created_at?: string | null
+}
+
+export interface VolumeBackup {
+  id: string
+  volume_id?: string | null
+  snapshot_id?: string | null
+  name?: string | null
+  description?: string | null
+  status: string
+  size_gib?: number | null
+  is_incremental?: boolean | null
+  container?: string | null
+  availability_zone?: string | null
+  metadata: Record<string, string>
+  project_id?: string | null
+  created_at?: string | null
+}
+
+export interface AdminStorageItem {
+  id?: string | null
+  name?: string | null
+  host?: string | null
+  binary?: string | null
+  status?: string | null
+  state?: string | null
+  description?: string | null
+  is_public?: boolean | null
+  consumer?: string | null
+  extra_specs?: Record<string, string>
+  specs?: Record<string, string>
+  capabilities?: Record<string, unknown>
+}
+
+export type StorageItem = Volume | VolumeSnapshot | VolumeBackup | AdminStorageItem
+
+export interface StoragePage {
+  items: StorageItem[]
+  page: PageInfo
+  partial_errors: Array<{ code: string; message: string; openstack_request_id?: string }>
+}
+
+export interface Operation {
+  id: string
+  kind: string
+  status: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  submitted_at: string
+  updated_at: string
+  resource_type: string
+  resource_id?: string | null
+  resource_name?: string | null
+  openstack_request_ids: string[]
+  result?: Record<string, unknown> | null
+  problem?: Record<string, unknown> | null
+}

@@ -12,6 +12,9 @@ import type {
   QuotaPayload,
   QuotaService,
   Session,
+  Operation,
+  StoragePage,
+  StorageQuery,
 } from './types'
 
 let csrfToken = ''
@@ -133,6 +136,77 @@ export const api = {
     })
     return request<KeyPairPage>(`/keypairs?${query}`, { signal })
   },
+  storage: (filters: StorageQuery, signal?: AbortSignal) => {
+    const paths = {
+      volumes: '/volumes', snapshots: '/volume-snapshots', backups: '/volume-backups',
+      types: '/admin/storage/volume-types', qos: '/admin/storage/qos-specs',
+      pools: '/admin/storage/pools', services: '/admin/storage/services',
+    } as const
+    const query = new URLSearchParams({
+      limit: String(filters.limit), page: String(filters.page),
+      sort: filters.sort, direction: filters.direction,
+    })
+    if (filters.name) query.set('name', filters.name)
+    if (filters.status) query.set('status', filters.status)
+    return request<StoragePage>(`${paths[filters.resource]}?${query}`, { signal })
+  },
+  storageCreate: (resource: 'volumes' | 'snapshots' | 'backups' | 'types' | 'qos', payload: unknown) => {
+    const paths = {
+      volumes: '/volumes', snapshots: '/volume-snapshots', backups: '/volume-backups',
+      types: '/admin/storage/volume-types', qos: '/admin/storage/qos-specs',
+    } as const
+    return request<Operation>(paths[resource], {
+      method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    })
+  },
+  storageUpdate: (resource: 'volumes' | 'snapshots' | 'backups' | 'types' | 'qos', id: string, payload: unknown) => {
+    const paths = {
+      volumes: '/volumes', snapshots: '/volume-snapshots', backups: '/volume-backups',
+      types: '/admin/storage/volume-types', qos: '/admin/storage/qos-specs',
+    } as const
+    return request<Operation>(`${paths[resource]}/${encodeURIComponent(id)}`, {
+      method: resource === 'types' || resource === 'qos' ? 'PUT' : 'PATCH',
+      headers: { 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(payload),
+    })
+  },
+  storageDelete: (resource: 'volumes' | 'snapshots' | 'backups' | 'types' | 'qos', id: string, force = false) => {
+    const paths = {
+      volumes: '/volumes', snapshots: '/volume-snapshots', backups: '/volume-backups',
+      types: '/admin/storage/volume-types', qos: '/admin/storage/qos-specs',
+    } as const
+    const query = new URLSearchParams({ confirmation: id })
+    if (resource === 'qos' && force) query.set('force', 'true')
+    if (force && resource !== 'qos') {
+      return request<Operation>(`${paths[resource]}/${encodeURIComponent(id)}/actions`, {
+        method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() },
+        body: JSON.stringify({ action: 'force_delete', confirmation: id, force: true }),
+      })
+    }
+    return request<Operation>(`${paths[resource]}/${encodeURIComponent(id)}?${query}`, {
+      method: 'DELETE', headers: { 'Idempotency-Key': crypto.randomUUID() },
+    })
+  },
+  volumeAction: (id: string, payload: Record<string, unknown>) =>
+    request<Operation>(`/volumes/${encodeURIComponent(id)}/actions`, {
+      method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    }),
+  snapshotAction: (id: string, payload: Record<string, unknown>) =>
+    request<Operation>(`/volume-snapshots/${encodeURIComponent(id)}/actions`, {
+      method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    }),
+  backupAction: (id: string, payload: Record<string, unknown>) =>
+    request<Operation>(`/volume-backups/${encodeURIComponent(id)}/actions`, {
+      method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    }),
+  serviceAction: (id: string, payload: Record<string, unknown>) =>
+    request<Operation>(`/admin/storage/services/${encodeURIComponent(id)}/actions`, {
+      method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify(payload),
+    }),
   instance: (instanceId: string, signal?: AbortSignal) =>
     request<InstanceDetail>(`/instances/${encodeURIComponent(instanceId)}`, { signal }),
   logout: async () => {

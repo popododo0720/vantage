@@ -13,6 +13,8 @@ import {
 } from './inventory-route'
 import { Pagination } from './Pagination'
 import { ImagesPage, KeyPairsPage } from './ProvisioningPages'
+import { StoragePage } from './StoragePage'
+import { DEFAULT_STORAGE_QUERY, parseStorageRoute, storagePath } from './storage-route'
 import type {
   ImageQuery,
   InstanceQuery,
@@ -23,6 +25,7 @@ import type {
   QuotaPayload,
   QuotaService,
   Session,
+  StorageQuery,
   WidgetError,
 } from './types'
 import './styles.css'
@@ -47,6 +50,7 @@ type State =
   }
   | { kind: 'images'; session: Session; query: ImageQuery; error?: ErrorInfo }
   | { kind: 'keypairs'; session: Session; query: InventoryQuery; error?: ErrorInfo }
+  | { kind: 'storage'; session: Session; query: StorageQuery; error?: ErrorInfo }
 type HistoryMode = 'push' | 'replace' | 'none'
 
 const labels = {
@@ -259,6 +263,8 @@ function scopedState(session: Session, route = '/overview', drawerFromList = fal
   if (imageQuery) return { kind: 'images', session, query: imageQuery }
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return { kind: 'keypairs', session, query: keypairQuery }
+  const storageQuery = parseStorageRoute(url.href)
+  if (storageQuery) return { kind: 'storage', session, query: storageQuery }
   const instanceRoute = parseInstanceRoute(url.href)
   if (instanceRoute) {
     return {
@@ -283,6 +289,7 @@ function pathForState(state: State): string {
   if (state.kind === 'instances') return instancePath(state.query, state.selectedId)
   if (state.kind === 'images') return imagePath(state.query)
   if (state.kind === 'keypairs') return keyPairPath(state.query)
+  if (state.kind === 'storage') return storagePath(state.query)
   return window.location.pathname
 }
 
@@ -296,6 +303,8 @@ function safeReturnUrl(value: unknown): string | undefined {
   if (imageQuery) return imagePath(imageQuery)
   const keypairQuery = parseKeyPairRoute(url.href)
   if (keypairQuery) return keyPairPath(keypairQuery)
+  const storageQuery = parseStorageRoute(url.href)
+  if (storageQuery) return storagePath(storageQuery)
   if (url.pathname !== '/overview' && url.pathname !== '/quotas') return undefined
   if (url.pathname === '/quotas' && url.searchParams.has('service')) {
     const service = url.searchParams.get('service')
@@ -322,6 +331,7 @@ function sessionForState(state: State): Session | undefined {
     || state.kind === 'instances'
     || state.kind === 'images'
     || state.kind === 'keypairs'
+    || state.kind === 'storage'
     ? state.session
     : undefined
 }
@@ -417,7 +427,7 @@ export function App() {
         next = scopedState(session, currentUrl())
       } else if (parseInstanceRoute(window.location.href) && session?.active_scope) {
         next = scopedState(session, currentUrl(), Boolean(window.history.state?.instanceDrawer))
-      } else if ((parseImageRoute(window.location.href) || parseKeyPairRoute(window.location.href)) && session?.active_scope) {
+      } else if ((parseImageRoute(window.location.href) || parseKeyPairRoute(window.location.href) || parseStorageRoute(window.location.href)) && session?.active_scope) {
         next = scopedState(session, currentUrl())
       }
       if (next) transition(next, 'none')
@@ -448,6 +458,7 @@ export function App() {
       && state.kind !== 'instances'
       && state.kind !== 'images'
       && state.kind !== 'keypairs'
+      && state.kind !== 'storage'
     ) return
     try {
       const session = await api.locale(next)
@@ -525,6 +536,7 @@ export function App() {
       selectedInstanceId={state.kind === 'instances' ? state.selectedId : undefined}
       imageQuery={state.kind === 'images' ? state.query : DEFAULT_IMAGE_QUERY}
       keypairQuery={state.kind === 'keypairs' ? state.query : DEFAULT_KEYPAIR_QUERY}
+      storageQuery={state.kind === 'storage' ? state.query : DEFAULT_STORAGE_QUERY}
       onNavigate={(view, filter = 'all') => {
         if (view === 'quotas') transition({ kind: 'quotas', session: state.session, filter })
         else if (view === 'instances') {
@@ -538,6 +550,8 @@ export function App() {
           transition({ kind: 'images', session: state.session, query: DEFAULT_IMAGE_QUERY })
         } else if (view === 'keypairs') {
           transition({ kind: 'keypairs', session: state.session, query: DEFAULT_KEYPAIR_QUERY })
+        } else if (view === 'storage') {
+          transition({ kind: 'storage', session: state.session, query: DEFAULT_STORAGE_QUERY })
         } else transition({ kind: 'overview', session: state.session })
       }}
       onInstanceQuery={(query, mode) => {
@@ -565,6 +579,9 @@ export function App() {
       }}
       onKeyPairQuery={(query, mode) => {
         if (state.kind === 'keypairs') transition({ ...state, query }, mode)
+      }}
+      onStorageQuery={(query, mode) => {
+        if (state.kind === 'storage') transition({ ...state, query }, mode)
       }}
       onSwitch={() => {
         pendingSafeRoute.current = state.kind === 'instances'
@@ -993,12 +1010,14 @@ function ProjectWorkspace({
   selectedInstanceId,
   imageQuery,
   keypairQuery,
+  storageQuery,
   onNavigate,
   onInstanceQuery,
   onInstanceOpen,
   onInstanceClose,
   onImageQuery,
   onKeyPairQuery,
+  onStorageQuery,
   onSwitch,
   onExpired,
   onLogout,
@@ -1008,18 +1027,20 @@ function ProjectWorkspace({
   language: ReactNode
   session: Session
   error?: ErrorInfo
-  view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs'
+  view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs' | 'storage'
   filter: QuotaFilter
   instanceQuery: InstanceQuery
   selectedInstanceId?: string
   imageQuery: ImageQuery
   keypairQuery: InventoryQuery
-  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs', filter?: QuotaFilter) => void
+  storageQuery: StorageQuery
+  onNavigate: (view: 'overview' | 'quotas' | 'instances' | 'images' | 'keypairs' | 'storage', filter?: QuotaFilter) => void
   onInstanceQuery: (query: InstanceQuery, mode: 'push' | 'replace') => void
   onInstanceOpen: (instanceId: string) => void
   onInstanceClose: () => void
   onImageQuery: (query: ImageQuery, mode: 'push' | 'replace') => void
   onKeyPairQuery: (query: InventoryQuery, mode: 'push' | 'replace') => void
+  onStorageQuery: (query: StorageQuery, mode: 'push' | 'replace') => void
   onSwitch: () => void
   onExpired: () => void
   onLogout: () => void
@@ -1116,6 +1137,18 @@ function ProjectWorkspace({
         >
           {t.keypairs}
         </a>
+        <strong>{t.storage}</strong>
+        <a
+          href="/storage"
+          className={view === 'storage' ? 'selected' : undefined}
+          aria-current={view === 'storage' ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            onNavigate('storage')
+          }}
+        >
+          {t.volumes}
+        </a>
       </aside>
       <main className="content">
         <ErrorNotice error={message ?? error} referenceLabel={t.requestReference} />
@@ -1157,12 +1190,20 @@ function ProjectWorkspace({
             onQuery={onImageQuery}
             onExpired={onExpired}
           />
-        ) : (
+        ) : view === 'keypairs' ? (
           <KeyPairsPage
             scopeKey={`${scope.project.id}:${scope.region}`}
             locale={locale}
             query={keypairQuery}
             onQuery={onKeyPairQuery}
+            onExpired={onExpired}
+          />
+        ) : (
+          <StoragePage
+            scopeKey={`${scope.project.id}:${scope.region}`}
+            locale={locale}
+            query={storageQuery}
+            onQuery={onStorageQuery}
             onExpired={onExpired}
           />
         )}
