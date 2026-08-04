@@ -925,7 +925,7 @@ components:
     CreateKeyPairRequest:
       type: object
       additionalProperties: false
-      required: [name, type, mode]
+      required: [name]
       properties:
         name: {type: string, minLength: 1, maxLength: 255}
         type: {type: string, enum: [ssh, x509], default: ssh}
@@ -937,8 +937,10 @@ components:
           description: Required for import and forbidden for compatibility generation.
       allOf:
         - if:
-            properties: {mode: {const: import}}
-            required: [mode]
+            anyOf:
+              - not: {required: [mode]}
+              - properties: {mode: {const: import}}
+                required: [mode]
           then:
             required: [public_key]
             properties: {public_key: {type: string, minLength: 1, maxLength: 16384}}
@@ -946,7 +948,7 @@ components:
             properties: {mode: {const: generate}}
             required: [mode]
           then:
-            properties: {public_key: {type: "null"}}
+            not: {required: [public_key]}
     CreatedKeyPair:
       type: object
       additionalProperties: false
@@ -955,6 +957,7 @@ components:
         keypair: {$ref: "#/components/schemas/KeyPair"}
         private_key:
           type: string
+          minLength: 1
           description: One-time private material; Vantage never persists or logs this value.
     OperationTarget:
       type: object

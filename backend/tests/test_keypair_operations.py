@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -13,8 +14,13 @@ from vantage_bff.adapters.openstack_sdk import OpenStackSdkAdapter
 from vantage_bff.app import create_app
 from vantage_bff.config import Settings
 from vantage_bff.models import KeyPairType
-from vantage_bff.operations import MemoryOperationStore, OperationStatus
-
+from vantage_bff.operations import (
+    MemoryOperationStore,
+    OperationScope,
+    OperationStatus,
+    OperationTarget,
+    operation_fingerprint,
+)
 
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIVantageTestKey alice@example"
 
@@ -103,10 +109,10 @@ def client_for(
         yield client
 
 
-def login(client: TestClient) -> str:
+def login(client: TestClient, username: str = "alice") -> str:
     response = client.post(
         "/api/v1/session/login",
-        json={"username": "alice", "password": "vantage", "domain": "default"},
+        json={"username": username, "password": "vantage", "domain": "default"},
     )
     assert response.status_code == 201
     return response.headers["X-CSRF-Token"]
@@ -116,10 +122,11 @@ def select_scope(
     client: TestClient,
     csrf_token: str,
     project_id: str = "project-alpha",
+    region: str = "RegionOne",
 ) -> str:
     response = client.put(
         "/api/v1/scope",
-        json={"project_id": project_id, "region": "RegionOne"},
+        json={"project_id": project_id, "region": region},
         headers={"X-CSRF-Token": csrf_token},
     )
     assert response.status_code == 200
@@ -163,14 +170,67 @@ def test_keypair_mutations_require_session_scope_csrf_and_idempotency() -> None:
     assert unscoped.status_code == 409
     assert unscoped.json()["code"] == "active_scope_required"
     assert missing_csrf.status_code == 403
-    assert missing_csrf.json()["code"] == "csrf_failed"
+    assert missing_csrf.json()["code"] == "csrf_invalid"
     assert missing_idempotency.status_code == 422
     assert missing_idempotency.json()["code"] == "invalid_request"
 
 
-def test_import_is_idempotent_persistent_and_project_scoped() -> None:
+@pytest.mark.parametrize(
+    ("idempotency_key", "expected_status"),
+    [("x" * 15, 422), ("x" * 16, 202), ("x" * 255, 202), ("x" * 256, 422)],
+)
+def test_idempotency_key_length_boundaries(
+    idempotency_key: str,
+    expected_status: int,
+) -> None:
+    with client_for(FakeOpenStackAdapter()) as client:
+        csrf = select_scope(client, login(client))
+        response = client.post(
+            "/api/v1/keypairs",
+            json={"name": f"boundary-{len(idempotency_key)}", "public_key": PUBLIC_KEY},
+            headers=mutation_headers(csrf, idempotency_key),
+        )
+
+    assert response.status_code == expected_status
+
+
+def test_generated_keypair_in_progress_replay_does_not_call_nova() -> None:
     adapter = RecordingKeyPairAdapter()
-    with client_for(adapter) as client:
+    store = operation_store()
+    payload = {
+        "name": "pending-generated",
+        "type": "ssh",
+        "mode": "generate",
+        "public_key": None,
+    }
+    asyncio.run(
+        store.begin(
+            scope=OperationScope("user-alice", "project-alpha", "RegionOne"),
+            idempotency_key="pending-generate-01",
+            fingerprint=operation_fingerprint("keypair.generate", payload),
+            kind="keypair.generate",
+            target=OperationTarget(resource_type="keypair", resource_name="pending-generated"),
+            trace_id="trace-original",
+        )
+    )
+
+    with client_for(adapter, store=store) as client:
+        csrf = select_scope(client, login(client))
+        replayed = client.post(
+            "/api/v1/keypairs",
+            json={"name": "pending-generated", "mode": "generate"},
+            headers=mutation_headers(csrf, "pending-generate-01"),
+        )
+
+    assert replayed.status_code == 409
+    assert replayed.json()["code"] == "operation_in_progress"
+    assert adapter.create_calls == []
+
+
+def test_import_is_idempotent_persistent_and_user_project_region_scoped() -> None:
+    adapter = RecordingKeyPairAdapter()
+    store = operation_store()
+    with client_for(adapter, store=store) as client:
         csrf = select_scope(client, login(client))
         headers = mutation_headers(csrf)
         payload = {"name": "ops-import", "public_key": PUBLIC_KEY}
@@ -185,8 +245,14 @@ def test_import_is_idempotent_persistent_and_project_scoped() -> None:
         listed = client.get("/api/v1/keypairs", params={"limit": 100})
         operation_id = created.json()["id"]
         operation = client.get(f"/api/v1/operations/{operation_id}")
-        select_scope(client, csrf, "project-beta")
-        hidden = client.get(f"/api/v1/operations/{operation_id}")
+        csrf = select_scope(client, csrf, "project-beta")
+        hidden_project = client.get(f"/api/v1/operations/{operation_id}")
+        select_scope(client, csrf, "project-alpha", "RegionTwo")
+        hidden_region = client.get(f"/api/v1/operations/{operation_id}")
+
+    with client_for(adapter, store=store) as other_user:
+        select_scope(other_user, login(other_user, "bob"))
+        hidden_user = other_user.get(f"/api/v1/operations/{operation_id}")
 
     assert created.status_code == 202
     assert created.json()["kind"] == "keypair.import"
@@ -202,8 +268,9 @@ def test_import_is_idempotent_persistent_and_project_scoped() -> None:
     assert any(item["name"] == "ops-import" for item in listed.json()["items"])
     assert operation.status_code == 200
     assert operation.json() == created.json()
-    assert hidden.status_code == 404
-    assert hidden.json()["code"] == "operation_not_found"
+    for hidden in (hidden_project, hidden_region, hidden_user):
+        assert hidden.status_code == 404
+        assert hidden.json()["code"] == "operation_not_found"
 
 
 def test_generated_private_key_is_returned_once_and_never_stored() -> None:
@@ -230,16 +297,18 @@ def test_generated_private_key_is_returned_once_and_never_stored() -> None:
 
 def test_delete_is_idempotent_and_removes_keypair() -> None:
     adapter = RecordingKeyPairAdapter()
+    keypair_name = "team/key #1"
     with client_for(adapter) as client:
         csrf = select_scope(client, login(client))
         imported = client.post(
             "/api/v1/keypairs",
-            json={"name": "delete-me", "public_key": PUBLIC_KEY},
+            json={"name": keypair_name, "public_key": PUBLIC_KEY},
             headers=mutation_headers(csrf, "import-delete-me-01"),
         )
         headers = mutation_headers(csrf, "delete-delete-me-01")
-        deleted = client.delete("/api/v1/keypairs/delete-me", headers=headers)
-        replayed = client.delete("/api/v1/keypairs/delete-me", headers=headers)
+        encoded_path = "/api/v1/keypairs/team%2Fkey%20%231"
+        deleted = client.delete(encoded_path, headers=headers)
+        replayed = client.delete(encoded_path, headers=headers)
         listed = client.get("/api/v1/keypairs", params={"limit": 100})
 
     assert imported.status_code == 202
@@ -248,7 +317,8 @@ def test_delete_is_idempotent_and_removes_keypair() -> None:
     assert deleted.json()["status"] == "succeeded"
     assert replayed.json()["id"] == deleted.json()["id"]
     assert len(adapter.delete_calls) == 1
-    assert all(item["name"] != "delete-me" for item in listed.json()["items"])
+    assert adapter.delete_calls[0]["name"] == keypair_name
+    assert all(item["name"] != keypair_name for item in listed.json()["items"])
 
 
 @pytest.mark.parametrize(

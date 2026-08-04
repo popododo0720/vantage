@@ -588,21 +588,19 @@ paths:
   /operations/{operation_id}:
     get:
       tags: [Operations]
-      summary: Get asynchronous operation state
+      summary: Get mutation state in the active scope
       operationId: getOperation
       parameters:
         - $ref: "#/components/parameters/OperationId"
       responses:
         "200":
-          description: Current operation state and request correlation
+          description: Current operation state and request correlation.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Operation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /images:
@@ -655,7 +653,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
   /keypairs:
     get:
-      tags: [KeyPairs]
+      tags: [Provisioning Inputs]
       summary: List keypairs in the active project
       operationId: listKeyPairs
       parameters:
@@ -663,7 +661,7 @@ paths:
         - $ref: "#/components/parameters/PageNumber"
       responses:
         "200":
-          description: Paginated keypairs without private material
+          description: A bounded cursor-backed keypair page without private material.
           content:
             application/json:
               schema:
@@ -672,6 +670,18 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
     post:
       tags: [KeyPairs]
       summary: Import a public key or use Nova compatibility generation
@@ -687,7 +697,7 @@ paths:
               $ref: "#/components/schemas/CreateKeyPairRequest"
       responses:
         "201":
-          description: Compatibility-generated key pair; private material appears once.
+          description: Compatibility-generated key pair with one-time private material.
           content:
             application/json:
               schema:
@@ -698,18 +708,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Operation"
-        "400":
-          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /keypairs/{keypair_name}:
     delete:
       tags: [KeyPairs]
-      summary: Delete a project keypair
+      summary: Delete a project key pair
       operationId: deleteKeyPair
       parameters:
         - name: keypair_name
@@ -717,6 +733,8 @@ paths:
           required: true
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
         - $ref: "#/components/parameters/CsrfToken"
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
@@ -732,6 +750,16 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /networks:
     get:
       tags: [Networks]
@@ -2352,7 +2380,7 @@ components:
     KeyPair:
       type: object
       additionalProperties: false
-      required: [name, type, fingerprint]
+      required: [name, type, fingerprint, public_key_preview, created_at, last_used_at]
       properties:
         name:
           type: string
@@ -2389,7 +2417,7 @@ components:
     CreateKeyPairRequest:
       type: object
       additionalProperties: false
-      required: [name, type, mode]
+      required: [name]
       properties:
         name:
           type: string
@@ -2412,8 +2440,10 @@ components:
           description: Required for import and forbidden for compatibility generation.
       allOf:
         - if:
-            properties: {mode: {const: import}}
-            required: [mode]
+            anyOf:
+              - not: {required: [mode]}
+              - properties: {mode: {const: import}}
+                required: [mode]
           then:
             required: [public_key]
             properties:
@@ -2422,8 +2452,7 @@ components:
             properties: {mode: {const: generate}}
             required: [mode]
           then:
-            properties:
-              public_key: {type: "null"}
+            not: {required: [public_key]}
     CreatedKeyPair:
       type: object
       additionalProperties: false
@@ -2433,7 +2462,8 @@ components:
           $ref: "#/components/schemas/KeyPair"
         private_key:
           type: string
-          description: One-time generated private material; never persisted or logged by Vantage.
+          minLength: 1
+          description: One-time private material; Vantage never persists or logs this value.
     Network:
       type: object
       additionalProperties: false

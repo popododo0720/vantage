@@ -1129,14 +1129,22 @@ describe('session and scope flow', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }))
   })
 
-  it('generates a key pair once, blocks duplicate submission, copies the private key, and refreshes in place', async () => {
+  it('generates a key pair once, blocks duplicate submission, copies or downloads the private key, and refreshes in place', async () => {
     const route = '/keypairs?limit=10&page=2'
     const privateMaterial = '-----BEGIN PRIVATE KEY-----\none-time-secret\n-----END PRIVATE KEY-----'
     const writeText = vi.fn().mockResolvedValue(undefined)
+    const createObjectURL = vi.fn().mockReturnValue('blob:private-key')
+    const revokeObjectURL = vi.fn()
+    const clickDownload = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
     let listCalls = 0
     let resolveCreate: ((response: Response) => void) | undefined
     window.history.replaceState({}, '', route)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
+    class DownloadURL extends URL {
+      static createObjectURL = createObjectURL
+      static revokeObjectURL = revokeObjectURL
+    }
+    vi.stubGlobal('URL', DownloadURL)
     const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
@@ -1160,6 +1168,7 @@ describe('session and scope flow', () => {
     await screen.findByRole('table', { name: 'Key pairs' })
     fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
     const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate' }))
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'generated-key' } })
     const submit = within(dialog).getByRole('button', { name: 'Generate key pair' })
     fireEvent.click(submit)
@@ -1184,6 +1193,10 @@ describe('session and scope flow', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Copy private key' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(privateMaterial))
     expect(within(dialog).getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Download private key' }))
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(clickDownload).toHaveBeenCalledOnce()
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:private-key'))
     await waitFor(() => expect(listCalls).toBe(2))
     expect(`${window.location.pathname}${window.location.search}`).toBe(route)
 
@@ -1345,6 +1358,7 @@ describe('session and scope flow', () => {
     await screen.findByRole('table', { name: 'Key pairs' })
     fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
     const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate' }))
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'conflicting-key' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Generate key pair' }))
 
@@ -1379,6 +1393,7 @@ describe('session and scope flow', () => {
     await screen.findByRole('table', { name: 'Key pairs' })
     fireEvent.click(screen.getByRole('button', { name: 'Import or generate' }))
     const dialog = await screen.findByRole('dialog', { name: 'Add a key pair' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Generate' }))
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'expired-key' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Generate key pair' }))
 

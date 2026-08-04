@@ -164,8 +164,10 @@ selection.
   where `public_key` is required. Explicit compatibility generation uses
   microversion 2.10, returns private material once, and never persists or logs
   it. Imported public keys never ask Vantage for private material.
-- Generated private material is shown in a dedicated one-time result state;
-  closing it is irreversible and a replay cannot recover the value.
+- Generated private material is shown in a dedicated one-time result state and
+  can be copied or downloaded from that state. The browser creates the download
+  only on demand and revokes its temporary object URL immediately; closing the
+  state is irreversible and a replay cannot recover the value.
 - Key-pair names, fingerprints, and public material are read-only after create.
   Deletion requires a named confirmation and uses the shared idempotency and
   operation contract.

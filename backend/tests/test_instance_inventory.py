@@ -754,7 +754,7 @@ def test_sdk_list_is_single_page_project_scoped_and_uses_nova_sort_keys(
     assert connection_calls[0]["project_id"] == "project-alpha"
     assert connection_calls[0]["region_name"] == "RegionOne"
     assert connection_calls[0]["api_timeout"] == 3.0
-    assert connection_calls[0]["app_version"] == "0.3.0"
+    assert connection_calls[0]["app_version"] == "0.4.0"
     assert connection_calls[0]["global_request_id"] == result.openstack_request_id
     assert "all_projects" not in connection_calls[0]
     assert len(get_calls) == 1

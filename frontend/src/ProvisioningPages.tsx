@@ -40,7 +40,7 @@ const copy = {
     publicMaterialRequired: 'Enter a public key or certificate.',
     privateKeyTitle: 'Save the private key now', privateKey: 'Private key',
     privateKeyOnce: 'This private key is shown once. Store it securely before closing.',
-    copyPrivateKey: 'Copy private key', copied: 'Copied',
+    copyPrivateKey: 'Copy private key', downloadPrivateKey: 'Download private key', copied: 'Copied',
     copyFailed: 'Copy failed. Select the key and copy it manually.',
     keypairGenerated: 'Key pair generated.', keypairImportAccepted: 'Key pair import requested.',
     delete: 'Delete', deleteKeypair: 'Delete key pair',
@@ -81,7 +81,7 @@ const copy = {
     publicMaterialRequired: '공개 키 또는 인증서를 입력하세요.',
     privateKeyTitle: '지금 개인 키를 저장하세요', privateKey: '개인 키',
     privateKeyOnce: '이 개인 키는 지금 한 번만 표시됩니다. 닫기 전에 안전한 곳에 저장하세요.',
-    copyPrivateKey: '개인 키 복사', copied: '복사됨',
+    copyPrivateKey: '개인 키 복사', downloadPrivateKey: '개인 키 다운로드', copied: '복사됨',
     copyFailed: '복사하지 못했습니다. 키를 선택하여 직접 복사하세요.',
     keypairGenerated: '키 페어를 생성했습니다.', keypairImportAccepted: '키 페어 가져오기를 요청했습니다.',
     delete: '삭제', deleteKeypair: '키 페어 삭제',
@@ -537,7 +537,7 @@ function CreateKeyPairModal({ t, returnFocus, onExpired, onClose, onSuccess }: {
   onClose: () => void
   onSuccess: (message: string, operation?: Operation) => void
 }) {
-  const [mode, setMode] = useState<KeyPairMode>('generate')
+  const [mode, setMode] = useState<KeyPairMode>('import')
   const [name, setName] = useState('')
   const [type, setType] = useState<KeyPairType>('ssh')
   const [publicMaterial, setPublicMaterial] = useState('')
@@ -621,6 +621,20 @@ function CreateKeyPairModal({ t, returnFocus, onExpired, onClose, onSuccess }: {
     }
   }
 
+  function downloadPrivateKey() {
+    const material = privateKey.current?.value
+    if (!material) return
+    const safeName = name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[.-]+/, '') || 'keypair'
+    const objectUrl = URL.createObjectURL(new Blob([material], { type: 'application/x-pem-file' }))
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = `${safeName}.pem`
+    document.body.append(anchor)
+    anchor.click()
+    anchor.remove()
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+  }
+
   const materialLabel = type === 'x509' ? t.x509Certificate : t.sshPublicKey
   return <KeyPairModal title={t.createKeypair} t={t} locked={pending} returnFocus={returnFocus}
     onClose={dismiss}>
@@ -658,6 +672,7 @@ function CreateKeyPairModal({ t, returnFocus, onExpired, onClose, onSuccess }: {
       {copyStatus === 'failed' && <p className="field-error" role="alert">{t.copyFailed}</p>}
       <div className="modal-actions"><button type="button" className="secondary"
         onClick={() => void copyPrivateKey()}>{copyStatus === 'copied' ? t.copied : t.copyPrivateKey}</button>
+      <button type="button" className="secondary" onClick={downloadPrivateKey}>{t.downloadPrivateKey}</button>
       <button type="button" onClick={dismiss}>{t.done}</button></div>
     </section>
   </KeyPairModal>
