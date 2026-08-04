@@ -1,11 +1,13 @@
 openapi: 3.1.0
 info:
   title: Vantage BFF API
-  version: 0.1.0
-  summary: Goal 1 contract for secure project entry
+  version: 0.4.0
+  summary: Implemented project console API through key-pair management
   description: |
-    Browser-facing API for Vantage Goal 1. The browser never receives an
-    OpenStack token or calls an OpenStack service endpoint directly.
+    Browser-facing API implemented by the current Vantage runtime. The browser
+    never receives an OpenStack token or calls an OpenStack service endpoint
+    directly. Operations not yet promoted to this runtime contract remain in
+    the staged `openapi.goal1-mvp.yaml` contract.
 servers:
   - url: /api/v1
 security:
@@ -16,9 +18,17 @@ tags:
   - name: Projects
     description: Accessible projects and the active project scope.
   - name: Overview
-    description: Quota-first, partially resilient project summary.
+    description: Quota-first project overview with isolated service failures.
+  - name: Quotas
+    description: Detailed compute, network, and storage quota usage.
   - name: Instances
-    description: Server-filtered and paginated project instance inventory.
+    description: Bounded, project-scoped Nova inventory and instance details.
+  - name: Provisioning Inputs
+    description: Bounded, project-scoped inventories used to provision instances.
+  - name: Operations
+    description: Scope-bound idempotent mutation state and OpenStack request correlation.
+  - name: KeyPairs
+    description: Project key-pair import, compatibility generation, and deletion.
 paths:
   /session:
     get:
@@ -28,19 +38,60 @@ paths:
       responses:
         "200":
           description: Authenticated session
+          headers:
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+    patch:
+      tags: [Session]
+      summary: Update browser-facing session preferences
+      operationId: updateSessionPreferences
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionPreferenceRequest"
+      responses:
+        "200":
+          description: Updated session preferences
+          headers:
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
     delete:
       tags: [Session]
       summary: Sign out and invalidate the server session
+      description: |
+        Idempotent when the session is absent or expired. A live session
+        requires its session-bound CSRF token.
       operationId: deleteSession
+      security:
+        - sessionCookie: []
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/OptionalCsrfToken"
       responses:
         "204":
-          description: Session deleted
+          description: Session deleted or already absent
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /session/login:
     post:
       tags: [Session]
@@ -58,17 +109,25 @@ paths:
           description: Session created
           headers:
             Set-Cookie:
-              description: Opaque HttpOnly, Secure, SameSite session cookie
+              description: Opaque HttpOnly, Secure, SameSite session cookie.
               schema:
                 type: string
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
   /projects:
     get:
       tags: [Projects]
@@ -76,7 +135,7 @@ paths:
       operationId: listProjects
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -84,18 +143,22 @@ paths:
             maxLength: 255
       responses:
         "200":
-          description: Accessible projects
+          description: Server-filtered project page
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProjectPage"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
   /scope:
     put:
       tags: [Projects]
       summary: Set the active project and region
       operationId: setScope
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
       requestBody:
         required: true
         content:
@@ -104,19 +167,32 @@ paths:
               $ref: "#/components/schemas/ScopeRequest"
       responses:
         "200":
-          description: New project-scoped session context
+          description: Rotated project-scoped session context
+          headers:
+            Set-Cookie:
+              description: Rotated opaque session cookie.
+              schema:
+                type: string
+            X-CSRF-Token:
+              $ref: "#/components/headers/CsrfToken"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
-          description: Scope could not be established
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
   /overview:
     get:
       tags: [Overview]
@@ -124,7 +200,7 @@ paths:
       operationId: getProjectOverview
       responses:
         "200":
-          description: Overview with independent widget results
+          description: Overview with independent service results
           content:
             application/json:
               schema:
@@ -133,14 +209,47 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /quotas:
+    get:
+      tags: [Quotas]
+      summary: Get detailed quotas for the active project
+      operationId: getProjectQuotas
+      parameters:
+        - name: service
+          in: query
+          description: Return one service group; omit for every quota source.
+          schema:
+            type: string
+            enum: [compute, network, storage]
+      responses:
+        "200":
+          description: Detailed quotas with independent service failures
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaCollection"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
   /instances:
     get:
       tags: [Instances]
       summary: List instances in the active project
+      description: |
+        Uses a server-side Nova marker chain. Vantage fetches at most one
+        requested page plus one look-ahead item and never enumerates the full
+        project collection to synthesize a total.
       operationId: listInstances
       parameters:
         - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/PageNumber"
         - name: name
           in: query
           schema:
@@ -150,9 +259,27 @@ paths:
           in: query
           schema:
             type: string
+            maxLength: 64
+        - name: image_id
+          in: query
+          schema:
+            type: string
+            maxLength: 255
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [created_at, name, status]
+            default: created_at
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
       responses:
         "200":
-          description: Paginated project instances
+          description: A bounded cursor-backed instance page.
           content:
             application/json:
               schema:
@@ -161,6 +288,214 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+  /images:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List images available to the active project
+      operationId: listImages
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: visibility
+          in: query
+          schema: {type: string, enum: [private, shared, community, public]}
+      responses:
+        "200":
+          description: A bounded cursor-backed image page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ImagePage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /flavors:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List flavors available to the active project
+      operationId: listFlavors
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+      responses:
+        "200":
+          description: A bounded cursor-backed flavor page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FlavorPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /keypairs:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List keypairs in the active project
+      operationId: listKeyPairs
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+      responses:
+        "200":
+          description: A bounded cursor-backed keypair page without private material.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyPairPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+    post:
+      tags: [KeyPairs]
+      summary: Import a public key or use Nova compatibility generation
+      operationId: createKeyPair
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateKeyPairRequest"}
+      responses:
+        "201":
+          description: Compatibility-generated key pair with one-time private material.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreatedKeyPair"}
+        "202":
+          description: Completed or accepted idempotent import operation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /keypairs/{keypair_name}:
+    delete:
+      tags: [KeyPairs]
+      summary: Delete a project key pair
+      operationId: deleteKeyPair
+      parameters:
+        - name: keypair_name
+          in: path
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 255}
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Completed or accepted idempotent deletion operation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /operations/{operation_id}:
+    get:
+      tags: [Operations]
+      summary: Get mutation state in the active scope
+      operationId: getOperation
+      parameters:
+        - $ref: "#/components/parameters/OperationId"
+      responses:
+        "200":
+          description: Current operation state and request correlation.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+  /networks:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List project-visible networks
+      operationId: listNetworks
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: status
+          in: query
+          schema: {type: string, maxLength: 64}
+      responses:
+        "200":
+          description: A bounded cursor-backed network page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/NetworkPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
+  /security-groups:
+    get:
+      tags: [Provisioning Inputs]
+      summary: List project-visible security groups
+      operationId: listSecurityGroups
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/PageNumber"
+        - name: name
+          in: query
+          schema: {type: string, maxLength: 255}
+      responses:
+        "200":
+          description: A bounded cursor-backed security-group page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SecurityGroupPage"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "503": {$ref: "#/components/responses/ServiceUnavailable"}
+        "504": {$ref: "#/components/responses/GatewayTimeout"}
+        "422": {$ref: "#/components/responses/InvalidRequest"}
   /instances/{instance_id}:
     get:
       tags: [Instances]
@@ -170,16 +505,33 @@ paths:
         - $ref: "#/components/parameters/InstanceId"
       responses:
         "200":
-          description: Instance detail
+          description: Project-scoped instance detail.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InstanceDetail"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
 components:
+  headers:
+    CsrfToken:
+      description: Session-bound CSRF token retained only in browser memory.
+      schema:
+        type: string
   securitySchemes:
     sessionCookie:
       type: apiKey
@@ -187,19 +539,52 @@ components:
       name: vantage_session
       description: Opaque session identifier; never an OpenStack token.
   parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Bound to the current Vantage server session.
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Unique per logical mutation within the active user, project, and region.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 255
+    OperationId:
+      name: operation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OptionalCsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: false
+      description: Required only when a live Vantage session exists.
+      schema:
+        type: string
     Limit:
       name: limit
       in: query
+      description: Discrete server-side page size selected by the user.
+      schema:
+        type: integer
+        enum: [10, 25, 50, 100]
+        default: 25
+    PageNumber:
+      name: page
+      in: query
+      description: One-based page number.
       schema:
         type: integer
         minimum: 1
-        maximum: 200
-        default: 50
-    Cursor:
-      name: cursor
-      in: query
-      schema:
-        type: string
+        default: 1
     InstanceId:
       name: instance_id
       in: path
@@ -209,25 +594,55 @@ components:
         format: uuid
   responses:
     Unauthenticated:
-      description: The Vantage session is missing or expired
+      description: The Vantage session is missing or expired.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     Forbidden:
-      description: OpenStack policy denied the active user's request
+      description: The request failed CSRF or OpenStack policy enforcement.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     NotFound:
-      description: Resource not found in the active scope
+      description: The requested resource is unavailable in the active scope.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: The active scope or requested progressive cursor page is unavailable.
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     RateLimited:
-      description: Too many authentication attempts
+      description: Too many requests at the Vantage or identity boundary.
+      headers:
+        Retry-After:
+          description: Seconds before retry when provided by the boundary.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: An OpenStack service is temporarily unavailable.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    GatewayTimeout:
+      description: An OpenStack service did not respond within the bounded deadline.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InvalidRequest:
+      description: Request schema or query validation failed.
       content:
         application/problem+json:
           schema:
@@ -250,10 +665,18 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+    SessionPreferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [locale]
+      properties:
+        locale:
+          type: string
+          enum: [en, ko]
     Session:
       type: object
       additionalProperties: false
-      required: [user, expires_at, projects, regions]
+      required: [user, active_scope, expires_at, regions, locale]
       properties:
         user:
           $ref: "#/components/schemas/User"
@@ -264,38 +687,43 @@ components:
         expires_at:
           type: string
           format: date-time
-        projects:
-          type: array
-          items:
-            $ref: "#/components/schemas/Project"
         regions:
           type: array
           items:
             type: string
+        locale:
+          type: string
+          enum: [en, ko]
     User:
       type: object
       additionalProperties: false
-      required: [id, name]
+      required: [id, name, domain_id]
       properties:
         id:
           type: string
         name:
           type: string
         domain_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
     Project:
       type: object
       additionalProperties: false
-      required: [id, name]
+      required: [id, name, domain_id, enabled]
       properties:
         id:
           type: string
         name:
           type: string
         domain_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"
         enabled:
-          type: boolean
+          anyOf:
+            - type: boolean
+            - type: "null"
     ScopeRequest:
       type: object
       additionalProperties: false
@@ -317,11 +745,51 @@ components:
     PageInfo:
       type: object
       additionalProperties: false
-      required: [has_more]
+      required:
+        - number
+        - size
+        - item_from
+        - item_to
+        - total_items
+        - total_pages
+        - has_previous
+        - has_next
+        - navigable_pages
+        - openstack_request_id
       properties:
-        has_more:
+        number:
+          type: integer
+          minimum: 1
+        size:
+          type: integer
+          enum: [10, 25, 50, 100]
+        item_from:
+          type: integer
+          minimum: 0
+        item_to:
+          type: integer
+          minimum: 0
+        total_items:
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
+        total_pages:
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
+        has_previous:
           type: boolean
-        next_cursor:
+        has_next:
+          type: boolean
+        navigable_pages:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+          uniqueItems: true
+        openstack_request_id:
           anyOf:
             - type: string
             - type: "null"
@@ -336,24 +804,353 @@ components:
             $ref: "#/components/schemas/Project"
         page:
           $ref: "#/components/schemas/PageInfo"
+    Instance:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, created_at, flavor, image, addresses]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+        status:
+          type: string
+        created_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        flavor:
+          anyOf:
+            - type: string
+            - type: "null"
+        image:
+          anyOf:
+            - type: string
+            - type: "null"
+        addresses:
+          anyOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+    InstancePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Instance"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    Image:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, visibility, disk_format, container_format, size_bytes, min_disk_gib, min_ram_mib, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        status: {anyOf: [{type: string}, {type: "null"}]}
+        visibility:
+          anyOf:
+            - {type: string, enum: [private, shared, community, public]}
+            - {type: "null"}
+        disk_format: {anyOf: [{type: string}, {type: "null"}]}
+        container_format: {anyOf: [{type: string}, {type: "null"}]}
+        size_bytes: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        min_disk_gib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        min_ram_mib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        created_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    ImagePage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Image"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    Flavor:
+      type: object
+      additionalProperties: false
+      required: [id, name, vcpus, ram_mib, disk_gib, ephemeral_gib, is_public]
+      properties:
+        id: {type: string}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        vcpus: {anyOf: [{type: integer, minimum: 1}, {type: "null"}]}
+        ram_mib: {anyOf: [{type: integer, minimum: 1}, {type: "null"}]}
+        disk_gib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        ephemeral_gib: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        is_public: {anyOf: [{type: boolean}, {type: "null"}]}
+    FlavorPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Flavor"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    KeyPair:
+      type: object
+      additionalProperties: false
+      required: [name, type, fingerprint, public_key_preview, created_at, last_used_at]
+      properties:
+        name: {type: string}
+        type:
+          anyOf:
+            - {type: string, enum: [ssh, x509]}
+            - {type: "null"}
+        fingerprint: {anyOf: [{type: string}, {type: "null"}]}
+        public_key_preview: {anyOf: [{type: string}, {type: "null"}]}
+        created_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        last_used_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    KeyPairPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/KeyPair"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    CreateKeyPairRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        type: {type: string, enum: [ssh, x509], default: ssh}
+        mode: {type: string, enum: [import, generate], default: import}
+        public_key:
+          anyOf:
+            - {type: string, minLength: 1, maxLength: 16384}
+            - {type: "null"}
+          description: Required for import and forbidden for compatibility generation.
+      allOf:
+        - if:
+            anyOf:
+              - not: {required: [mode]}
+              - properties: {mode: {const: import}}
+                required: [mode]
+          then:
+            required: [public_key]
+            properties: {public_key: {type: string, minLength: 1, maxLength: 16384}}
+        - if:
+            properties: {mode: {const: generate}}
+            required: [mode]
+          then:
+            not: {required: [public_key]}
+    CreatedKeyPair:
+      type: object
+      additionalProperties: false
+      required: [keypair, private_key]
+      properties:
+        keypair: {$ref: "#/components/schemas/KeyPair"}
+        private_key:
+          type: string
+          minLength: 1
+          description: One-time private material; Vantage never persists or logs this value.
+    OperationTarget:
+      type: object
+      additionalProperties: false
+      required: [resource_type, resource_id, resource_name]
+      properties:
+        resource_type: {type: string}
+        resource_id: {anyOf: [{type: string}, {type: "null"}]}
+        resource_name: {anyOf: [{type: string}, {type: "null"}]}
+    Operation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - status
+        - submitted_at
+        - updated_at
+        - target
+        - trace_id
+        - openstack_request_ids
+        - problem
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string}
+        status: {type: string, enum: [accepted, running, succeeded, failed, cancelled]}
+        submitted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        target: {$ref: "#/components/schemas/OperationTarget"}
+        trace_id: {type: string}
+        openstack_request_ids:
+          type: array
+          items: {type: string}
+        problem:
+          anyOf:
+            - {$ref: "#/components/schemas/Problem"}
+            - {type: "null"}
+    Network:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, shared, external, mtu, subnet_count]
+      properties:
+        id: {type: string, format: uuid}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        status: {anyOf: [{type: string}, {type: "null"}]}
+        shared: {anyOf: [{type: boolean}, {type: "null"}]}
+        external: {anyOf: [{type: boolean}, {type: "null"}]}
+        mtu: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        subnet_count: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+    NetworkPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Network"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    SecurityGroup:
+      type: object
+      additionalProperties: false
+      required: [id, name, description, rule_count, revision_number]
+      properties:
+        id: {type: string, format: uuid}
+        name: {anyOf: [{type: string}, {type: "null"}]}
+        description: {anyOf: [{type: string}, {type: "null"}]}
+        rule_count: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+        revision_number: {anyOf: [{type: integer, minimum: 0}, {type: "null"}]}
+    SecurityGroupPage:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/SecurityGroup"}}
+        page: {$ref: "#/components/schemas/PageInfo"}
+    InstanceVolumeAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, device]
+      properties:
+        id:
+          type: string
+        device:
+          anyOf:
+            - type: string
+            - type: "null"
+    InstanceDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - status
+        - created_at
+        - flavor
+        - image
+        - addresses
+        - volumes
+        - openstack_request_id
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          anyOf:
+            - type: string
+            - type: "null"
+        status:
+          type: string
+        created_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        flavor:
+          anyOf:
+            - type: string
+            - type: "null"
+        image:
+          anyOf:
+            - type: string
+            - type: "null"
+        addresses:
+          anyOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+        volumes:
+          anyOf:
+            - type: array
+              items:
+                $ref: "#/components/schemas/InstanceVolumeAttachment"
+            - type: "null"
+        openstack_request_id:
+          anyOf:
+            - type: string
+            - type: "null"
     Quota:
       type: object
       additionalProperties: false
-      required: [resource, used]
+      required: [service, resource, used, reserved, limit, unit, state]
       properties:
+        service:
+          type: string
+          enum: [compute, network, storage]
         resource:
           type: string
-          enum: [instances, cores, ram_mib, volumes, gigabytes, floating_ips]
+          enum:
+            - instances
+            - cores
+            - ram_mib
+            - volumes
+            - gigabytes
+            - snapshots
+            - backups
+            - backup_gigabytes
+            - floating_ips
         used:
+          type: number
+          minimum: 0
+        reserved:
           type: number
           minimum: 0
         limit:
           anyOf:
             - type: number
+              minimum: 0
             - type: "null"
+        unit:
+          type: string
+          enum: [count, MiB, GiB]
         state:
           type: string
-          enum: [normal, warning, critical, unknown]
+          enum: [normal, watch, high, unknown]
+    QuotaCollection:
+      type: object
+      additionalProperties: false
+      required: [scope, generated_at, stale, quotas, partial_errors]
+      properties:
+        scope:
+          $ref: "#/components/schemas/Scope"
+        generated_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+        quotas:
+          type: array
+          items:
+            $ref: "#/components/schemas/Quota"
+        partial_errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/WidgetError"
     WidgetError:
       type: object
       additionalProperties: false
@@ -368,7 +1165,13 @@ components:
     ProjectOverview:
       type: object
       additionalProperties: false
-      required: [scope, generated_at, quotas, instance_summary, partial_errors]
+      required:
+        - scope
+        - generated_at
+        - stale
+        - quotas
+        - instance_summary
+        - partial_errors
       properties:
         scope:
           $ref: "#/components/schemas/Scope"
@@ -377,13 +1180,14 @@ components:
           format: date-time
         stale:
           type: boolean
-          default: false
         quotas:
           type: array
           items:
             $ref: "#/components/schemas/Quota"
         instance_summary:
-          $ref: "#/components/schemas/InstanceSummary"
+          anyOf:
+            - $ref: "#/components/schemas/InstanceSummary"
+            - type: "null"
         partial_errors:
           type: array
           items:
@@ -397,69 +1201,24 @@ components:
           type: integer
           minimum: 0
         active:
-          type: integer
-          minimum: 0
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
         stopped:
-          type: integer
-          minimum: 0
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
         error:
-          type: integer
-          minimum: 0
-    Instance:
-      type: object
-      additionalProperties: false
-      required: [id, name, status, created_at]
-      properties:
-        id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        status:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        flavor:
-          type: string
-        image:
-          type: string
-        addresses:
-          type: array
-          items:
-            type: string
-    InstancePage:
-      type: object
-      additionalProperties: false
-      required: [items, page]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Instance"
-        page:
-          $ref: "#/components/schemas/PageInfo"
-    InstanceDetail:
-      allOf:
-        - $ref: "#/components/schemas/Instance"
-        - type: object
-          properties:
-            volumes:
-              type: array
-              items:
-                type: object
-                required: [id]
-                properties:
-                  id:
-                    type: string
-                  device:
-                    type: string
-            openstack_request_id:
-              type: string
+          anyOf:
+            - type: integer
+              minimum: 0
+            - type: "null"
     Problem:
       type: object
-      additionalProperties: true
-      required: [type, title, status]
+      additionalProperties: false
+      required: [type, title, status, detail, code, trace_id]
       properties:
         type:
           type: string
@@ -470,7 +1229,11 @@ components:
           type: integer
         detail:
           type: string
+        code:
+          type: string
         trace_id:
           type: string
         openstack_request_id:
-          type: string
+          anyOf:
+            - type: string
+            - type: "null"

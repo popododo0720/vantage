@@ -58,10 +58,19 @@ Reference:
 
 - Every list accepts a bounded `limit`.
 - Cursor or marker pagination is used where the upstream service supports it.
-- Filters are translated to upstream server-side filters.
+- Filters are translated to upstream server-side filters where the service
+  supports them. Keystone user-project selection is filtered and paginated in
+  the BFF from the server-session membership snapshot; the browser never
+  receives the complete membership set.
 - Vantage never fetches a complete collection only to slice it in the browser.
-- Responses include `has_more`, `next_cursor`, and an upstream request ID when
-  available.
+- The browser uses a visible page number and never receives an upstream marker
+  or cursor. The BFF keeps a scope- and query-bound short-lived cursor chain.
+- Responses include the page size, result range, navigable page numbers,
+  previous/next availability, optional reliable totals, and an upstream
+  request ID when available.
+- Previous/next availability is response metadata used to enable the two
+  icon-only edge chevrons. It never introduces visible `Previous`, `Prev`, or
+  `Next` text buttons.
 
 ## Mutation Contract
 
@@ -70,10 +79,15 @@ Reference:
 - Long-running work returns a task ID instead of holding the browser request
   open.
 - Tasks retain the Vantage trace ID and OpenStack request ID.
+- Edit payloads contain only fields advertised by the active resource contract;
+  unsupported or hidden fields are never submitted as guessed null values.
+- Delete confirmation previews bounded dependencies but does not weaken or
+  replace the upstream policy/state decision.
+- Force delete is a separate policy- and capability-gated command with its own
+  confirmation and idempotency key.
 
 ## noVNC
 
 - Vantage requests a remote console from Nova only after access validation.
 - Console URLs and tokens have a short lifetime and are never persisted.
 - Console secrets do not enter application logs, analytics, or error reports.
-

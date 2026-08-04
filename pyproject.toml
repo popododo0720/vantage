@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vantage-bff"
+version = "0.1.0"
+description = "Vantage OpenStack Console browser-facing BFF"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "pydantic>=2.11,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+openstack = ["openstacksdk>=4.7,<5"]
+dev = [
+  "httpx>=0.28,<1",
+  "mypy>=1.17,<2",
+  "openapi-spec-validator>=0.7,<1",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/vantage_bff"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["vantage_bff"]
+mypy_path = "backend"
+
+[[tool.mypy.overrides]]
+module = ["openstack", "openstack.*"]
+ignore_missing_imports = true
